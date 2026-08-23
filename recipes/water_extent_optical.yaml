@@ -1,0 +1,39 @@
+id: water_extent_optical
+version: "1.0"
+display_name: "Seasonal water extent change"
+plain_question: "Is this lake, reservoir, river, or pond changing size?"
+sensor: S2
+detector: mndwi_extent
+resolution_m: 10
+bands: [B02, B03, B04, B08, B11, SCL]
+indices: [MNDWI]
+mask_chain: [cloudscore_plus, s2cloudless, scl_shadow, snow]
+min_valid_fraction: 0.70
+baseline:
+  strategy: monthly_extent
+  min_years: 2
+  min_observations: 12
+defaults:
+  cloudscore_threshold: 0.60
+  s2cloudless_threshold: 0.40
+  threshold: 0.10
+  fixed_mndwi_threshold: 0.0
+  min_mapping_unit_m2: 2500
+  consecutive_confirmations: 1
+  exit_ratio: 0.7
+default_provenance:
+  cloudscore_threshold: literature
+  s2cloudless_threshold: literature
+  threshold: heuristic
+  fixed_mndwi_threshold: literature
+  min_mapping_unit_m2: heuristic
+  consecutive_confirmations: heuristic
+  exit_ratio: heuristic
+reference:
+  citation: "Xu, H. (2006). Modification of NDWI to enhance open water features. International Journal of Remote Sensing 27(14), 3025-3033."
+  url: "https://doi.org/10.1080/01431160600589179"
+  note: "Otsu is derived per observation. If the histogram cannot be separated, the fixed threshold is used and the run says so."
+limitations:
+  - "MNDWI confuses shadow and some dark built surfaces with water."
+  - "Turbidity and aquatic vegetation shift index values."
+  - "Seasonal comparison needs at least two years of history for a dependable baseline."

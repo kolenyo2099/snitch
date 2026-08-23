@@ -1,0 +1,39 @@
+id: burn_severity_optical
+version: "1.0"
+display_name: "Burn extent and fire severity"
+plain_question: "Has this area burned, and how badly?"
+sensor: S2
+detector: dnbr
+resolution_m: 10
+bands: [B02, B03, B04, B8A, B12, SCL]
+indices: [NBR, dNBR]
+mask_chain: [cloudscore_plus, s2cloudless, scl_shadow, snow]
+min_valid_fraction: 0.70
+baseline:
+  strategy: seasonal_median
+  min_years: 1
+  min_observations: 6
+defaults:
+  cloudscore_threshold: 0.60
+  s2cloudless_threshold: 0.40
+  threshold: 100
+  min_mapping_unit_m2: 5000
+  consecutive_confirmations: 1
+  exit_ratio: 0.7
+  severity_breaks: [-250, -100, 100, 270, 440, 660]
+default_provenance:
+  cloudscore_threshold: literature
+  s2cloudless_threshold: literature
+  threshold: literature
+  min_mapping_unit_m2: heuristic
+  consecutive_confirmations: heuristic
+  exit_ratio: heuristic
+  severity_breaks: literature
+reference:
+  citation: "Key, C.H. & Benson, N.C. (2006). Landscape Assessment. FIREMON, USDA Forest Service RMRS-GTR-164-CD."
+  url: "https://www.fs.usda.gov/research/treesearch/24066"
+  note: "dNBR is scaled by 1000. The seven standard severity classes are stored as pixel counts on every run."
+limitations:
+  - "Severity classes are ecosystem-dependent and were derived for North American systems."
+  - "Immediate alerts describe extent more reliably than severity; a roughly 30-day post-fire delay is standard for severity assessment."
+  - "dNBR is sensitive to pre-fire condition; RdNBR may be preferable in heterogeneous vegetation."

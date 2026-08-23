@@ -1,0 +1,39 @@
+id: vegetation_loss_optical
+version: "1.0"
+display_name: "Vegetation loss or land clearing"
+plain_question: "Has vegetation been cleared or damaged here?"
+sensor: S2
+detector: harmonic_residual
+resolution_m: 10
+bands: [B03, B04, B08, B11, B12, SCL]
+indices: [NDVI, NBR]
+mask_chain: [cloudscore_plus, s2cloudless, scl_shadow, snow]
+min_valid_fraction: 0.70
+baseline:
+  strategy: harmonic
+  min_years: 2
+  min_observations: 30
+defaults:
+  cloudscore_threshold: 0.60
+  s2cloudless_threshold: 0.40
+  threshold: 3.0
+  min_mapping_unit_m2: 2000
+  consecutive_confirmations: 2
+  harmonics: 2
+  exit_ratio: 0.7          # provenance: heuristic
+default_provenance:
+  cloudscore_threshold: literature
+  s2cloudless_threshold: literature
+  threshold: heuristic
+  min_mapping_unit_m2: heuristic
+  consecutive_confirmations: heuristic
+  harmonics: heuristic
+  exit_ratio: heuristic
+reference:
+  citation: "Zhu, Z. & Woodcock, C.E. (2014). Continuous change detection and classification of land cover using all available Landsat data. Remote Sensing of Environment 144, 152-171."
+  url: "https://doi.org/10.1016/j.rse.2014.01.011"
+  note: "Threshold is expressed in robust standard deviations of the harmonic model residual, following the CCDC change criterion of repeated exceedance across consecutive observations."
+limitations:
+  - "Cannot distinguish harvest from illegal clearing."
+  - "Requires at least two years of history to model seasonality."
+  - "Under persistent cloud, detection may lag by weeks. Pair with a radar recipe."

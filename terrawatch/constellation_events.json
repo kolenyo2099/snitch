@@ -1,0 +1,18 @@
+{
+  "source": "https://dataspace.copernicus.eu/news/2026-5-28-sentinel-1-orbital-reconfiguration-dates",
+  "note": "User-editable. Add new events here; no code change is needed.",
+  "events": [
+    {"id": "s1d-open-data", "sensor": "S1", "start": "2026-04-17", "end": "2026-04-17",
+     "title": "Sentinel-1D open data access begins",
+     "description": "Sentinel-1D open data access begins, starting a three-satellite interim phase."},
+    {"id": "s1c-manoeuvre", "sensor": "S1", "start": "2026-06-09", "end": "2026-06-23",
+     "title": "Sentinel-1C manoeuvre",
+     "description": "Sentinel-1C acquisitions suspended during an orbital manoeuvre."},
+    {"id": "s1a-termination", "sensor": "S1", "start": "2026-06-29", "end": "2026-06-29",
+     "title": "Sentinel-1A operations terminated",
+     "description": "Sentinel-1A operations terminated."},
+    {"id": "s1cd-final", "sensor": "S1", "start": "2026-07-01", "end": "2099-12-31",
+     "title": "Final S1C/S1D configuration",
+     "description": "Final S1C/S1D configuration: six-day revisit pattern shifted by one day relative to the previous S1A/S1B timeline."}
+  ]
+}

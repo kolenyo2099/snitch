@@ -1,0 +1,45 @@
+id: flood_radar
+version: "1.0"
+display_name: "Flooding and surface water"
+plain_question: "Is this area flooded?"
+sensor: S1
+detector: s1_ratio_flood
+resolution_m: 10
+bands: [VV, VH]
+indices: []
+mask_chain: [slope, hand]
+min_valid_fraction: 0.70
+baseline:
+  strategy: median
+  min_years: 1
+  min_observations: 8
+defaults:
+  threshold: 1.25
+  threshold_mode: fixed        # or `otsu`, which derives the cut per scene
+  polarisation: VH
+  max_slope_deg: 5.0
+  max_hand_m: 15.0
+  hand_drainage_area_m2: 1000000
+  min_mapping_unit_m2: 10000
+  consecutive_confirmations: 1  # floods recede; waiting for a second pass loses them
+  exit_ratio: 0.8              # provenance: heuristic
+default_provenance:
+  threshold: literature
+  threshold_mode: literature
+  polarisation: literature
+  max_slope_deg: literature
+  max_hand_m: heuristic
+  hand_drainage_area_m2: heuristic
+  min_mapping_unit_m2: literature
+  consecutive_confirmations: heuristic
+  exit_ratio: heuristic
+reference:
+  citation: "UN-SPIDER Recommended Practice: Flood Mapping and Damage Assessment Using Sentinel-1 SAR Data in Google Earth Engine. Otsu, N. (1979). A threshold selection method from gray-level histograms. IEEE Transactions on Systems, Man, and Cybernetics 9(1), 62-66."
+  url: "https://doi.org/10.1109/TSMC.1979.4310076"
+  note: "The 1.25 default is the UN-SPIDER recommended reference-to-target ratio. In otsu mode the per-scene derived threshold is recorded on the run and shown next to the fixed default."
+limitations:
+  - "SAR reads smooth dry surfaces — tarmac, sand, dry riverbeds — as water."
+  - "Flooding under vegetation canopy is substantially under-detected; dense urban flooding is hidden by double-bounce."
+  - "Wind roughening suppresses the open-water signal, so a windy overpass can erase a real flood."
+  - "HAND is derived locally from GLO-30 with D8 routing; small AOIs and closed DEM sinks can make the drainage estimate conservative."
+  - "Only observations from the project's own relative orbit and pass direction are compared."

@@ -1,0 +1,73 @@
+const BASE = "/api/v1";
+
+async function req<T>(path: string, init?: RequestInit): Promise<T> {
+  const pw = localStorage.getItem("tw_password");
+  const r = await fetch(BASE + path, {
+    ...init,
+    headers: {
+      "content-type": "application/json",
+      ...(pw ? { "x-terrawatch-password": pw } : {}),
+      ...(init?.headers || {}),
+    },
+  });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  return r.status === 204 ? (undefined as T) : r.json();
+}
+
+export const api = {
+  health: () => req<any>("/health"),
+  healthFull: () => req<any>("/health?check_adapters=true"),
+  aoiPreview: (aoi_geojson: any, signal?: AbortSignal) =>
+    req<any>("/aoi/preview",
+             { method: "POST", body: JSON.stringify({ aoi_geojson }), signal }),
+  projects: () => req<{ items: any[] }>("/projects"),
+  methodologies: (u: string) => req<{ items: any[] }>(`/projects/${u}/methodologies`),
+  addMethodology: (u: string, recipe_id: string) =>
+    req<any>(`/projects/${u}/methodologies`,
+             { method: "POST", body: JSON.stringify({ recipe_id }) }),
+  removeMethodology: (u: string, id: number) =>
+    req<void>(`/projects/${u}/methodologies/${id}`, { method: "DELETE" }),
+  project: (u: string) => req<any>(`/projects/${u}`),
+  projectHealth: (u: string) => req<any>(`/projects/${u}/health`),
+  createProject: (body: any) =>
+    req<any>("/projects", { method: "POST", body: JSON.stringify(body) }),
+  patchProject: (u: string, body: any) =>
+    req<any>(`/projects/${u}`, { method: "PATCH", body: JSON.stringify(body) }),
+  setGee: (u: string, enabled: boolean) =>
+    req<any>(`/projects/${u}/gee`, { method: "POST", body: JSON.stringify({ enabled }) }),
+  activate: (u: string) => req<any>(`/projects/${u}/activate`, { method: "POST" }),
+  pause: (u: string) => req<any>(`/projects/${u}/pause`, { method: "POST" }),
+  remove: (u: string) => req<void>(`/projects/${u}`, { method: "DELETE" }),
+  runNow: (u: string) => req<any>(`/projects/${u}/run-now`, { method: "POST" }),
+  // `m` addresses one methodology; omitted, the project's primary one is used.
+  startBacktest: (u: string, years = 3, m?: number) =>
+    req<any>(`/projects/${u}/backtest?years=${years}${m ? `&methodology=${m}` : ""}`,
+             { method: "POST" }),
+  backtest: (u: string) => req<any>(`/projects/${u}/backtest`),
+  setThreshold: (u: string, body: any, m?: number) =>
+    req<any>(`/projects/${u}/threshold${m ? `?methodology=${m}` : ""}`,
+             { method: "POST", body: JSON.stringify(body) }),
+  reanalyse: (u: string, params: any, m?: number) =>
+    req<any>(`/projects/${u}/reanalyse${m ? `?methodology=${m}` : ""}`,
+             { method: "POST", body: JSON.stringify(params) }),
+  observations: (u: string) => req<{ items: any[] }>(`/projects/${u}/observations`),
+  runs: (u: string) => req<{ items: any[] }>(`/projects/${u}/runs`),
+  run: (u: string) => req<any>(`/runs/${u}`),
+  alerts: (u: string) => req<{ items: any[] }>(`/projects/${u}/alerts`),
+  alert: (u: string) => req<any>(`/alerts/${u}`),
+  triage: (u: string, body: any) =>
+    req<any>(`/alerts/${u}`, { method: "PATCH", body: JSON.stringify(body) }),
+  incidents: (u: string) => req<{ items: any[] }>(`/projects/${u}/incidents`),
+  feed: (q = "") => req<{ items: any[] }>(`/feed${q}`),
+  diagnostics: (q = "") => req<{ items: any[] }>(`/diagnostics${q}`),
+  ackDiagnostic: (id: number) =>
+    req<any>(`/diagnostics/${id}/acknowledge`, { method: "POST" }),
+  recipes: () => req<any[]>("/recipes"),
+  detectors: () => req<any[]>("/detectors"),
+  tileToken: (id: number) => req<any>(`/artifacts/${id}/token`),
+  artifactOverlay: (id: number) => req<any>(`/artifacts/${id}/overlay`),
+  gc: (dry = true) => req<any>(`/maintenance/gc?dry_run=${dry}`, { method: "POST" }),
+};
+
+export const artifactUrl = (id: number | null) =>
+  id ? `${BASE}/artifacts/${id}/raw` : undefined;

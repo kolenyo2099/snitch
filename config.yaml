@@ -1,0 +1,53 @@
+storage:
+  data_dir: ./data
+  max_artifact_gb: 50
+  gc_enabled: false
+
+adapters:
+  cdse:
+    enabled: true
+    credentials_env: [CDSE_CLIENT_ID, CDSE_CLIENT_SECRET]
+    timeout_s: 60
+  earthsearch:
+    enabled: true
+  planetary:
+    # Sentinel-1 RTC. Blob access is signed with an anonymously issued SAS token,
+    # so there is no credential to configure.
+    enabled: true
+    collection: sentinel-1-rtc
+  gee:
+    enabled: false
+    service_account_json: null
+    project_id: null
+    monthly_eecu_budget: 100
+    daily_eecu_cap: 10
+    # Anything estimated at or above this goes through a batch Export task, which
+    # needs a bucket; synchronous getDownloadURL is never used for real work.
+    batch_export_eecu: 1.0
+    export_bucket: null
+    eecu_per_megapixel: 0.0008
+
+scheduler:
+  max_concurrent_runs: 2
+  poll_jitter_minutes: 30
+
+alerts:
+  default_exit_ratio: 0.7
+  incident_window_days: 30
+  cooldown_days: 45
+  notification_cooldown_hours: 24
+
+explanations:
+  vlm_enabled: false
+  vlm_endpoint: null
+  vlm_model: null
+
+notifications:
+  webhook: {enabled: false, url: null}
+  email: {enabled: false, smtp_host: null, smtp_port: 587, from: null, to: []}
+  slack: {enabled: false, webhook_url: null}
+  matrix: {enabled: false, homeserver: null, room_id: null, token_env: MATRIX_TOKEN}
+  desktop: {enabled: false}
+
+ui:
+  password: null

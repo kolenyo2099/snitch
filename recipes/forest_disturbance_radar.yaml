@@ -1,0 +1,41 @@
+id: forest_disturbance_radar
+version: "1.0"
+display_name: "All-weather forest disturbance"
+plain_question: "Has forest been cut or disturbed, even under cloud?"
+sensor: S1
+detector: radd_probabilistic
+resolution_m: 10
+bands: [VV, VH]
+indices: []
+mask_chain: [slope]
+min_valid_fraction: 0.70
+baseline:
+  strategy: radar_mixture
+  min_years: 1
+  min_observations: 12
+defaults:
+  threshold: 0.75
+  flag_probability: 0.75
+  confirmation_probability: 0.975
+  min_mapping_unit_m2: 1000
+  consecutive_confirmations: 2
+  max_slope_deg: 15.0
+  exit_ratio: 0.8
+default_provenance:
+  threshold: literature
+  flag_probability: literature
+  confirmation_probability: literature
+  min_mapping_unit_m2: heuristic
+  consecutive_confirmations: literature
+  max_slope_deg: heuristic
+  exit_ratio: heuristic
+reference:
+  citation: "Reiche, J. et al. (2021). Forest disturbance alerts for the Congo Basin using Sentinel-1. Environmental Research Letters 16, 024005."
+  url: "https://doi.org/10.1088/1748-9326/abd0a8"
+  note: "The local detector fits two backscatter components per pixel and median-matches stable forest before scoring."
+limitations:
+  - "The source method is tuned for tropical forest and needs recalibration elsewhere."
+  - "Large uniform clearings may confirm more slowly than edges."
+  - "The detector reports disturbance, not whether it was human or natural."
+  - "Confirmation currently uses consecutive spatially overlapping alerts; persistent Bayesian state is not yet stored per pixel."
+  - "Only observations from the project's own relative orbit and pass direction are compared."

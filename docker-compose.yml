@@ -1,0 +1,30 @@
+services:
+  api:
+    build: .
+    command: uvicorn terrawatch.api:app --host 0.0.0.0 --port 8000
+    ports: ["8000:8000"]
+    volumes: ["./data:/data", "./config.yaml:/app/config.yaml:ro",
+              "./recipes:/app/recipes:ro"]
+    environment:
+      TW_DATA_DIR: /data
+    restart: unless-stopped
+
+  worker:
+    build: .
+    command: ["python", "-c", "from terrawatch.worker import main; main()"]
+    volumes: ["./data:/data", "./config.yaml:/app/config.yaml:ro",
+              "./recipes:/app/recipes:ro"]
+    environment:
+      TW_DATA_DIR: /data
+    depends_on: [api]
+    restart: unless-stopped
+    # scale with: docker compose up -d --scale worker=3
+
+  tiler:
+    image: ghcr.io/developmentseed/titiler:latest
+    ports: ["8001:8000"]
+    volumes: ["./data/artifacts:/data/artifacts:ro"]   # read-only by design
+    environment:
+      TITILER_API_CORS_ORIGINS: "*"
+      GDAL_DISABLE_READDIR_ON_OPEN: EMPTY_DIR
+    restart: unless-stopped

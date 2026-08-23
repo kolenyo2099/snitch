@@ -1,0 +1,48 @@
+id: construction_optical
+version: "1.0"
+display_name: "Construction and built-up expansion"
+plain_question: "Is something being built here?"
+sensor: S2
+secondary_sensor: S1
+detector: builtup_dual
+resolution_m: 10
+bands: [B02, B03, B04, B08, B11, B12, SCL]
+radar_bands: [VV, VH]
+indices: [NDBI, brightness]
+mask_chain: [cloudscore_plus, s2cloudless, scl_shadow, snow]
+min_valid_fraction: 0.70
+baseline:
+  strategy: robust_median
+  min_years: 1
+  min_observations: 12
+defaults:
+  cloudscore_threshold: 0.60
+  s2cloudless_threshold: 0.40
+  threshold: 2.5
+  optical_z_threshold: 2.5
+  radar_z_threshold: 2.5
+  radar_alpha: 0.01
+  enl: 4.4
+  min_mapping_unit_m2: 1000
+  consecutive_confirmations: 3
+  exit_ratio: 0.7
+default_provenance:
+  cloudscore_threshold: literature
+  s2cloudless_threshold: literature
+  threshold: heuristic
+  optical_z_threshold: heuristic
+  radar_z_threshold: heuristic
+  radar_alpha: statistical
+  enl: literature
+  min_mapping_unit_m2: heuristic
+  consecutive_confirmations: heuristic
+  exit_ratio: heuristic
+reference:
+  citation: "Zha, Y., Gao, J. & Ni, S. (2003). Use of normalized difference built-up index in automatically mapping urban areas. International Journal of Remote Sensing 24(3), 583-594."
+  url: "https://doi.org/10.1080/01431160304987"
+  note: "Optical NDBI/brightness and same-orbit VV evidence are scored independently. Agreement confirms immediately; one stream requires three observations."
+limitations:
+  - "At 10 m, Sentinel data cannot reliably detect individual buildings."
+  - "This detects site-scale activity such as clearing, foundation work, hardstanding, and large structures."
+  - "Bare soil can look identical to early construction, which is why three confirmations are required."
+  - "Radar is paired to the nearest same-orbit observation within six days, so the two signals are not necessarily sensed on the same date."

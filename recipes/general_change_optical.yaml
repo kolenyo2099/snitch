@@ -1,0 +1,43 @@
+id: general_change_optical
+version: "1.0"
+display_name: "General unsupervised change"
+plain_question: "Has anything at all changed here?"
+sensor: S2
+detector: irmad_cva
+resolution_m: 10
+bands: [B02, B03, B04, B08, B11, B12, SCL]
+indices: [NDVI, NBR]
+mask_chain: [cloudscore_plus, s2cloudless, scl_shadow, snow]
+min_valid_fraction: 0.70
+baseline:
+  strategy: robust_median
+  min_years: 1
+  min_observations: 2
+defaults:
+  cloudscore_threshold: 0.60
+  s2cloudless_threshold: 0.40
+  threshold: 0.05
+  max_iterations: 50
+  convergence: 0.001
+  same_season_window_days: 45
+  min_mapping_unit_m2: 1000
+  consecutive_confirmations: 1
+  exit_ratio: 1.0
+default_provenance:
+  cloudscore_threshold: literature
+  s2cloudless_threshold: literature
+  threshold: statistical
+  max_iterations: literature
+  convergence: heuristic
+  same_season_window_days: heuristic
+  min_mapping_unit_m2: heuristic
+  consecutive_confirmations: heuristic
+  exit_ratio: statistical
+reference:
+  citation: "Nielsen, A.A. (2007). The regularized iteratively reweighted MAD method for change detection. IEEE Transactions on Image Processing 16(2), 463-478."
+  url: "https://doi.org/10.1109/TIP.2006.888195"
+  note: "The local path iterates regularised IR-MAD to convergence or 50 iterations and reports CVA direction in NDVI/NBR space."
+limitations:
+  - "This is bitemporal and has no inherent notion of seasonality. Phenology can look like change."
+  - "The same-season window is recorded as a default parameter but is not yet enforced by scene admission."
+  - "Use a specific recipe whenever you know what kind of change matters."

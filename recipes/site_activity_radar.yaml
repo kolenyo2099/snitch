@@ -1,0 +1,41 @@
+id: site_activity_radar
+version: "1.0"
+display_name: "Site activity (statistical radar monitoring)"
+plain_question: "Has anything changed at this facility, whatever it is?"
+sensor: S1
+detector: wishart_omnibus
+resolution_m: 10
+bands: [VV, VH]
+indices: []
+mask_chain: [slope]
+min_valid_fraction: 0.70
+baseline:
+  strategy: wishart_period
+  min_years: 1
+  min_observations: 8
+defaults:
+  threshold: 0.01            # this IS alpha: a per-pixel false-alarm rate
+  alpha: 0.01
+  enl: 4.4                   # equivalent number of looks; depends on preprocessing
+  max_slope_deg: 15.0
+  min_mapping_unit_m2: 500
+  consecutive_confirmations: 2
+  exit_ratio: 1.0            # a p-value threshold is already the exit criterion
+default_provenance:
+  threshold: statistical
+  alpha: statistical
+  enl: literature
+  max_slope_deg: heuristic
+  min_mapping_unit_m2: heuristic
+  consecutive_confirmations: heuristic
+  exit_ratio: statistical
+reference:
+  citation: "Conradsen, K., Nielsen, A.A. & Skriver, H. (2016). Determining the points of change in time series of polarimetric SAR data. IEEE Transactions on Geoscience and Remote Sensing 54(5), 3007-3024."
+  url: "https://doi.org/10.1109/TGRS.2015.2510160"
+  note: "The threshold is a genuine per-pixel false-alarm probability, not an arbitrary number. Every run states the expected number of chance crossings for this AOI (alpha times the valid pixel count) next to the observed count."
+limitations:
+  - "Assumes pixel statistics follow the complex Wishart model. Speckle-filtered input violates it, so this recipe deliberately runs on unfiltered multilook data."
+  - "Alpha is a per-pixel rate: over a large AOI the expected number of false positives is alpha times the pixel count, and only the minimum mapping unit suppresses them."
+  - "The equivalent number of looks is a parameter because it depends on how the product was processed; the default 4.4 matches Sentinel-1 IW GRD."
+  - "The test says a change occurred and in which direction, not what caused it."
+  - "Only observations from the project's own relative orbit and pass direction are compared."

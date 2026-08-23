@@ -85,6 +85,7 @@ def _poll_one(con, job, payload, methodology_id: int):
     start = (_dt(since) + timedelta(seconds=1)) if since else \
         datetime.now(timezone.utc) - timedelta(days=30)
     end = datetime.now(timezone.utc)
+    db.progress(con, job, 0, None, "Checking for new imagery…")
     scenes = adapter.search(aoi, start, end)
     if not scenes:
         db.diagnostic(con, "NO_ACQUISITION", "info",
@@ -365,6 +366,7 @@ def fit_baseline(con, job, payload):
     years = recipe.get("baseline", {}).get("min_years", 2)
     end = _dt(payload["before"]) if payload.get("before") else datetime.now(timezone.utc)
     start = end - timedelta(days=365 * years + 30)
+    db.progress(con, job, 0, None, "Searching for baseline scenes…")
     scenes = adapter.search(aoi, start, end, max_cloud=60)
     skipped_orbit = 0
     for s in list(scenes):
@@ -382,7 +384,10 @@ def fit_baseline(con, job, payload):
                       project_id=p["id"])
         return {"observations": 0, "fitted": False}
     stack, obs_ids, crs, transform = [], [], None, None
-    for s in scenes:
+    for i, s in enumerate(scenes):
+        db.progress(con, job, i, len(scenes),
+                    f"Fitting baseline: reading {s.datetime[:10]} "
+                    f"({i + 1} of {len(scenes)})")
         try:
             data, invalid, summary, vf = _load_masked(con, p, recipe, adapter, s)
         except Exception as e:  # noqa: BLE001
@@ -835,8 +840,12 @@ def backtest(con, job, payload):
         m = db.methodology(con, p["id"], m["id"])
         if m["baseline_artifact_id"] is None:
             return {"fitted": False}
+    db.progress(con, job, 0, None, "Searching the catalogue for scenes…")
+    scenes = sorted(adapter.search(aoi, split, end), key=lambda x: x.datetime)
     n = 0
-    for s in sorted(adapter.search(aoi, split, end), key=lambda x: x.datetime):
+    for i, s in enumerate(scenes):
+        db.progress(con, job, i, len(scenes),
+                    f"Scoring {s.datetime[:10]} ({i + 1} of {len(scenes)})")
         try:
             run_scene(con, job, {"project_id": p["id"], "methodology_id": m["id"],
                                  "scene_id": s.scene_id,
@@ -846,6 +855,7 @@ def backtest(con, job, payload):
         except Exception as e:  # noqa: BLE001
             log.warning("backtest scene failed",
                         extra={"extra": {"scene": s.scene_id, "error": str(e)}})
+    db.progress(con, job, len(scenes), len(scenes), "Done")
     con.execute("UPDATE project SET status='draft', updated_at=? WHERE id=? AND"
                 " status='calibrating'", (db.now(), p["id"]))
     return {"scored": n}
@@ -860,12 +870,15 @@ def reanalyse(con, job, payload):
     params = {**params, **(payload.get("params") or {})}
     con.execute("UPDATE project_methodology SET params_json=?, updated_at=?"
                 " WHERE id=?", (json.dumps(params), db.now(), m["id"]))
+    rows = con.execute(
+        "SELECT r.id, r.uuid, o.stac_item_json, o.adapter, o.scene_id FROM run r"
+        " JOIN observation o ON o.id=r.target_observation_id WHERE r.project_id=?"
+        " AND r.methodology_id=? AND r.status='ok' ORDER BY r.started_at",
+        (p["id"], m["id"])).fetchall()
     n = 0
-    for r in con.execute(
-            "SELECT r.id, r.uuid, o.stac_item_json, o.adapter, o.scene_id FROM run r"
-            " JOIN observation o ON o.id=r.target_observation_id WHERE r.project_id=?"
-            " AND r.methodology_id=? AND r.status='ok' ORDER BY r.started_at",
-            (p["id"], m["id"])).fetchall():
+    for r in rows:
+        db.progress(con, job, n, len(rows),
+                    f"Re-scoring history ({n + 1} of {len(rows)})")
         run_scene(con, job, {"project_id": p["id"], "methodology_id": m["id"],
                              "scene_id": r["scene_id"], "adapter": r["adapter"],
                              "item": json.loads(r["stac_item_json"]),

@@ -22,6 +22,8 @@ button {
 button:hover { border-color: var(--accent); }
 button.primary { background: var(--accent); color: #05130d; border-color: var(--accent); font-weight: 600; }
 button:disabled { opacity: .45; cursor: not-allowed; }
+button.danger { color: var(--red); }
+button.danger:hover { border-color: var(--red); }
 input, select, textarea {
   font: inherit; background: var(--panel2); color: var(--text);
   border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px;
@@ -166,23 +168,25 @@ code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-
 }
 
 /* AOI coverage check: the counts are only meaningful once the bar stops. */
-.coverage-progress .progress-track {
+.progress-track {
   height: 4px; margin: 10px 0 8px; border-radius: 2px;
   background: var(--border, #2a2a2a); overflow: hidden;
 }
-/* Indeterminate on purpose: the STAC page count is not known up front, so any
-   percentage here would be invented. It reports "still working", not "how far". */
-.coverage-progress .progress-fill {
+/* Indeterminate by default: a catalogue search has no known page count up front, so
+   any percentage there would be invented. It reports "still working", not "how far".
+   Once a job knows its denominator it adds .det and sets an explicit width. */
+.progress-fill {
   height: 100%; width: 40%; border-radius: 2px;
   background: var(--accent);
   animation: coverage-sweep 1.1s ease-in-out infinite;
 }
+.progress-fill.det { animation: none; transition: width .4s ease; }
 @keyframes coverage-sweep {
   0%   { transform: translateX(-100%); }
   100% { transform: translateX(250%); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .coverage-progress .progress-fill { animation-duration: 3s; }
+  .progress-fill { animation-duration: 3s; }
 }
 .chip.settled { margin-left: 8px; color: var(--accent); border-color: var(--accent); }
 

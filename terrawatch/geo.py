@@ -5,6 +5,21 @@ import math
 from shapely.geometry import mapping, shape
 
 
+def clean(aoi: dict) -> dict:
+    """Normalise a user-drawn geometry before it is stored or sent to a STAC API.
+
+    Hand-drawn polygons routinely carry duplicate consecutive vertices (a stray
+    double-click) or self-intersections (a bowtie). Earth Search rejects the former
+    with a bare 400 -- "Cannot determine orientation: edges adjacent to (x,y)
+    coincide" -- which surfaced as an unexplained coverage-check failure. buffer(0)
+    drops the duplicates and splits the bowtie into a valid MultiPolygon.
+    """
+    fixed = shape(aoi).buffer(0)
+    if fixed.is_empty:
+        raise ValueError("That shape encloses no area. Draw it again.")
+    return mapping(fixed)
+
+
 def utm_crs(aoi: dict) -> str:
     """UTM zone EPSG code for the AOI centroid — the project's analysis CRS."""
     c = shape(aoi).centroid

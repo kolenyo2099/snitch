@@ -134,7 +134,10 @@ def aoi_preview(body: AoiIn):
     monitorable — which S1 orbits cover it and how much usable S2 exists (§13.2)."""
     from collections import Counter
     from datetime import datetime, timedelta, timezone
-    aoi = body.aoi_geojson
+    try:
+        aoi = geo.clean(body.aoi_geojson)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(400, f"That area could not be read as a shape: {e}")
     area = geo.area_km2(aoi)
     out = {"area_km2": area, "analysis_crs": geo.utm_crs(aoi),
            "slow_warning": area > 500,
@@ -206,16 +209,20 @@ def create_project(p: ProjectIn, c=Depends(con)):
     elif sensors == {"S1", "S2"}:
         preference = ["cdse", "earthsearch", "planetary"]
     params = {**recipe["defaults"], **p.params}
+    try:
+        aoi = geo.clean(p.aoi_geojson)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(400, f"That area could not be read as a shape: {e}")
     now = db.now()
     uuid = db.new_uuid()
-    cron = p.schedule_cron or geo.suggest_cron(p.aoi_geojson, recipe["sensor"])
+    cron = p.schedule_cron or geo.suggest_cron(aoi, recipe["sensor"])
     cur = c.execute(
         "INSERT INTO project(uuid,name,description,aoi_geojson,aoi_area_km2,"
         "analysis_crs,recipe_id,recipe_version,params_json,adapter_preference,"
         "s1_relative_orbit,s1_pass_direction,schedule_cron,status,created_at,"
         "updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'draft',?,?)",
-        (uuid, p.name, p.description, json.dumps(p.aoi_geojson),
-         geo.area_km2(p.aoi_geojson), geo.utm_crs(p.aoi_geojson), recipe["id"],
+        (uuid, p.name, p.description, json.dumps(aoi),
+         geo.area_km2(aoi), geo.utm_crs(aoi), recipe["id"],
          recipe["version"], json.dumps(params), json.dumps(preference),
          p.s1_relative_orbit, p.s1_pass_direction, cron, now, now))
     for r in chosen:
@@ -378,6 +385,16 @@ def soft_delete(uuid: str, c=Depends(con)):
 def run_now(uuid: str, c=Depends(con)):
     p = _project(c, uuid)
     return {"job_id": db.enqueue(c, "poll", {"project_id": p["id"]}, p["id"])}
+
+
+@app.get(f"{V1}/projects/{{uuid}}/jobs")
+def project_jobs(uuid: str, c=Depends(con), limit: int = 5):
+    """Recent background work for this project, newest first, each with how far it
+    has got. The UI polls this to draw a real progress bar instead of a spinner."""
+    p = _project(c, uuid)
+    return {"items": [_row(r) for r in c.execute(
+        "SELECT * FROM job WHERE project_id=? ORDER BY id DESC LIMIT ?",
+        (p["id"], limit))]}
 
 
 @app.post(f"{V1}/projects/{{uuid}}/backtest", status_code=202)

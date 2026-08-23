@@ -3,6 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { DrawMap } from "../components/MapView";
 import { Calibrate } from "../components/Calibrate";
+import { ProjectProgress } from "../components/Progress";
+import { STATUS_HELP } from "../components/Chips";
 import { DetectorSpec, Recipe, Run } from "../types";
 
 const STEPS = ["Where", "What", "Calibrate", "Watch"];
@@ -304,6 +306,17 @@ export default function Wizard() {
             </div>
           )}
 
+          <div className="panel">
+            <label>Name this monitor
+              <input value={name} style={{ width: "100%" }}
+                     onChange={(e) => setName(e.target.value)}
+                     placeholder="Northern block" />
+            </label>
+            <p className="tiny muted">
+              Just for you — how it will be listed. You can rename it any time.
+            </p>
+          </div>
+
           {recipe && (
             <div className="panel">
               <b>What this method cannot do</b>
@@ -325,13 +338,18 @@ export default function Wizard() {
       {step === 2 && (
         <div className="grid">
           {backtesting && (
-            <div className="panel">
-              <b>Scoring the last {BACKTEST_YEARS} years at this site…</b>
-              <div className="muted">
-                {runs.length} observation{runs.length === 1 ? "" : "s"} scored so far. This
-                fits the baseline and replays history; it can take several minutes.
+            <>
+              <div className="panel">
+                <b>Calibrating</b>
+                <p className="tiny muted" style={{ margin: "4px 0 0" }}>
+                  {STATUS_HELP.calibrating}
+                </p>
+                <div className="muted" style={{ marginTop: 8 }}>
+                  {runs.length} observation{runs.length === 1 ? "" : "s"} scored so far.
+                </div>
               </div>
-            </div>
+              {uuid && <ProjectProgress uuid={uuid} />}
+            </>
           )}
           <Calibrate runs={runs} threshold={threshold} units={spec?.score_units || ""}
                     polarity={spec?.score_polarity}

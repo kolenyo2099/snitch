@@ -60,9 +60,12 @@ class StacAdapter:
                collection: str | None = None, limit: int = 500,
                max_cloud: float = 90.0) -> list[SceneRef]:
         coll = collection or self.collection
+        # Normalise here rather than only at ingress: projects stored before this
+        # existed still hold the raw drawn shape, and every STAC call routes here.
+        from .geo import clean
         body = {
             "collections": [coll],
-            "intersects": aoi,
+            "intersects": clean(aoi),
             "datetime": f"{start.date()}T00:00:00Z/{end.date()}T23:59:59Z",
             "limit": 100,
         }

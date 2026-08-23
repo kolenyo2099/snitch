@@ -70,3 +70,22 @@ export function ScoreValue({ value, units, semantics, threshold }:
     </span>
   );
 }
+
+/** What each project status actually means, in the user's terms. "Calibrating" in
+ *  particular is opaque on its own: it is the one status that describes work in
+ *  progress rather than a settled state. */
+export const STATUS_HELP: Record<string, string> = {
+  draft: "Created but not watching yet. Set a threshold and activate it to start.",
+  calibrating:
+    "Learning what normal looks like here. It is fitting a baseline from years of " +
+    "past imagery and re-scoring that history, so you can see what scores this site " +
+    "produces before you choose an alert threshold. No alerts are sent while this " +
+    "runs, and it can take several minutes to a few hours depending on the area.",
+  active: "Watching. New imagery is checked on the schedule and scored against the threshold.",
+  paused: "Not checking for new imagery. History and settings are kept.",
+  failed: "The last background job failed after its retries. See the Health tab.",
+};
+
+export function StatusChip({ status }: { status: string }) {
+  return <span className="chip" title={STATUS_HELP[status] || status}>{status}</span>;
+}

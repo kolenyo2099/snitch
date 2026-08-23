@@ -38,6 +38,7 @@ export const api = {
   activate: (u: string) => req<any>(`/projects/${u}/activate`, { method: "POST" }),
   pause: (u: string) => req<any>(`/projects/${u}/pause`, { method: "POST" }),
   remove: (u: string) => req<void>(`/projects/${u}`, { method: "DELETE" }),
+  jobs: (u: string) => req<{ items: any[] }>(`/projects/${u}/jobs`),
   runNow: (u: string) => req<any>(`/projects/${u}/run-now`, { method: "POST" }),
   // `m` addresses one methodology; omitted, the project's primary one is used.
   startBacktest: (u: string, years = 3, m?: number) =>

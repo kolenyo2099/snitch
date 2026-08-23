@@ -2,6 +2,8 @@
 import json, os, sqlite3, uuid
 from datetime import datetime, timezone
 
+from .log import log
+
 DATA_DIR = os.environ.get("TW_DATA_DIR", os.path.join(os.getcwd(), "data"))
 DB_PATH = os.path.join(DATA_DIR, "terrawatch.db")
 # Kept separate from DB_PATH on purpose; see scheduler.start().
@@ -87,6 +89,8 @@ CREATE TABLE IF NOT EXISTS job (
   status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
   max_attempts INTEGER NOT NULL DEFAULT 3, lease_expires_at TEXT,
   available_at TEXT NOT NULL, last_error TEXT,
+  progress_done INTEGER NOT NULL DEFAULT 0, progress_total INTEGER,
+  progress_note TEXT,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 
 CREATE TABLE IF NOT EXISTS gee_usage (
@@ -158,6 +162,10 @@ def _migrate(con) -> None:
         if "methodology_id" not in _columns(con, table):
             con.execute(f"ALTER TABLE {table} ADD COLUMN methodology_id INTEGER"
                         f" REFERENCES project_methodology(id)")
+    for col, decl in (("progress_done", "INTEGER NOT NULL DEFAULT 0"),
+                      ("progress_total", "INTEGER"), ("progress_note", "TEXT")):
+        if col not in _columns(con, "job"):
+            con.execute(f"ALTER TABLE job ADD COLUMN {col} {decl}")
 
 
 def ensure_methodologies(con, project_id: int) -> list:
@@ -229,6 +237,23 @@ def lease(con, lease_seconds: int = 300):
         con.execute("ROLLBACK")
         raise
     return row
+
+
+def progress(con, job, done: int, total: int | None = None,
+             note: str | None = None) -> None:
+    """Report how far a long job has got, so the UI can show a real bar instead of a
+    spinner. Best-effort: handlers are also called directly (from tests and from
+    ``backtest``, which reuses its own job row), and a failed progress write must
+    never fail the job itself."""
+    if job is None:
+        return
+    job_id = job["id"] if not isinstance(job, int) else job
+    try:
+        con.execute("UPDATE job SET progress_done=?, progress_total=COALESCE(?,"
+                    "progress_total), progress_note=COALESCE(?,progress_note),"
+                    " updated_at=? WHERE id=?", (done, total, note, now(), job_id))
+    except Exception:  # noqa: BLE001
+        log.warning("progress update failed", extra={"extra": {"job": job_id}})
 
 
 def finish(con, job_id: int, error: str | None = None):

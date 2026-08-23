@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
 import { Sparkline } from "../components/Sparkline";
+import { StatusChip } from "../components/Chips";
 import { Project } from "../types";
 
 type Row = Project & { scores: number[]; open_incidents: number; diags: number;
@@ -9,9 +10,9 @@ type Row = Project & { scores: number[]; open_incidents: number; diags: number;
 
 export default function Projects() {
   const [rows, setRows] = useState<Row[]>([]);
+  const [err, setErr] = useState<string>();
 
-  useEffect(() => {
-    (async () => {
+  const load = async () => {
       const ps = (await api.projects()).items as Project[];
       setRows(await Promise.all(ps.map(async (p) => {
         const [runs, inc, h] = await Promise.all([
@@ -25,8 +26,18 @@ export default function Projects() {
           last: h.last_usable_observation,
         };
       })));
-    })();
-  }, []);
+  };
+  useEffect(() => { load(); }, []);
+
+  const remove = async (p: Project) => {
+    // Soft delete: the row disappears from every list but the scored history and
+    // evidence stay on disk, which is the whole point of an audit trail.
+    if (!confirm(`Delete "${p.name}"? It stops watching and disappears from this `
+                 + `list. Its recorded observations and alerts are kept on disk.`))
+      return;
+    try { await api.remove(p.uuid); await load(); }
+    catch (e: any) { setErr(e.message || "That project could not be deleted."); }
+  };
 
   return (
     <>
@@ -37,11 +48,12 @@ export default function Projects() {
         </div>
         <Link to="/new"><button className="primary">New monitor</button></Link>
       </div>
+      {err && <div className="err-box" style={{ marginBottom: 12 }}>{err}</div>}
       <div className="panel">
         <table>
           <thead>
             <tr><th>Name</th><th>Recipe</th><th>Recent scores</th><th>Last observation</th>
-                <th>Open incidents</th><th>Diagnostics</th><th>Status</th></tr>
+                <th>Open incidents</th><th>Diagnostics</th><th>Status</th><th></th></tr>
           </thead>
           <tbody>
             {rows.map((r) => (
@@ -53,10 +65,12 @@ export default function Projects() {
                 <td className="tiny">{r.last?.slice(0, 10) || <span className="muted">never</span>}</td>
                 <td>{r.open_incidents || <span className="muted">0</span>}</td>
                 <td>{r.diags || <span className="muted">0</span>}</td>
-                <td><span className="chip">{r.status}</span></td>
+                <td><StatusChip status={r.status} /></td>
+                <td><button className="danger" onClick={() => remove(r)}
+                            aria-label={`Delete ${r.name}`}>Delete</button></td>
               </tr>
             ))}
-            {!rows.length && <tr><td colSpan={7} className="muted">No projects yet.</td></tr>}
+            {!rows.length && <tr><td colSpan={8} className="muted">No projects yet.</td></tr>}
           </tbody>
         </table>
       </div>

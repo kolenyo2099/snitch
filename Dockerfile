@@ -17,9 +17,10 @@ COPY terrawatch/ ./terrawatch/
 COPY recipes/ ./recipes/
 COPY config.yaml README.md BUILD.md ./
 COPY --from=ui /ui/dist ./frontend/dist
-# Build-time reference check: an unresolvable citation fails the image (spec §19).
+# Build-time reference check (spec §19): an unresolvable citation fails the image.
+# Builds with no network access must opt out explicitly:
+#   docker build --build-arg VERIFY_REFERENCES=0 .
 ARG VERIFY_REFERENCES=1
-RUN if [ "$VERIFY_REFERENCES" = "1" ]; then python -m terrawatch.recipes || \
-    echo "WARNING: reference check skipped (no network at build time)"; fi
+RUN if [ "$VERIFY_REFERENCES" = "1" ]; then python -m terrawatch.recipes; fi
 ENV TW_DATA_DIR=/data
 CMD ["uvicorn", "terrawatch.api:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -7,7 +7,8 @@ import { Alert, Diagnostic, Project, ProjectHealth } from "../types";
 export default function Dashboard() {
   const [health, setHealth] = useState<{ p: Project; h: ProjectHealth }[]>([]);
   const [items, setItems] = useState<(Alert | Diagnostic)[]>([]);
-  const [filter, setFilter] = useState({ severity: "", user_status: "", project: "" });
+  const [filter, setFilter] = useState({ severity: "", user_status: "", project: "",
+                                         date_from: "", date_to: "" });
   const [err, setErr] = useState<string>();
 
   const load = async () => {
@@ -48,6 +49,12 @@ export default function Dashboard() {
           <option value="true">Real change</option><option value="false">False alarm</option>
           <option value="unclear">Unclear</option>
         </select>
+        <input type="date" aria-label="From date" title="From date (inclusive)"
+               value={filter.date_from}
+               onChange={(e) => setFilter({ ...filter, date_from: e.target.value })} />
+        <input type="date" aria-label="To date" title="To date (inclusive)"
+               value={filter.date_to}
+               onChange={(e) => setFilter({ ...filter, date_to: e.target.value })} />
         <button onClick={load}>Refresh</button>
       </div>
 

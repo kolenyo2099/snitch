@@ -12,6 +12,7 @@ from affine import Affine
 
 from terrawatch import adapters, artifacts, db, geo, worker
 from terrawatch.adapters import SceneRef
+from terrawatch.recipes import REGISTRY as RECIPES
 
 AOI = {"type": "Polygon", "coordinates": [[[0.0, 0.0], [0.02, 0.0], [0.02, 0.02],
                                            [0.0, 0.02], [0.0, 0.0]]]}
@@ -88,9 +89,8 @@ def env(tmp_path, monkeypatch):
     from terrawatch import pipeline
     monkeypatch.setattr(pipeline.adapters, "first_healthy", lambda prefs, sensor=None: fake)
     monkeypatch.setattr(pipeline.adapters, "get_adapter", lambda name: fake)
-    monkeypatch.setattr(pipeline, "_render_chips",
-                        lambda *a, **k: {"before": None, "after": None,
-                                         "overlay": None})
+    # Chips render for real: the two-band display_bands crash hid here for months
+    # precisely because this suite stubbed rendering out.
     con = db.connect(str(tmp_path / "t.db"))
     monkeypatch.setattr(db, "DB_PATH", str(tmp_path / "t.db"))
     worker._load_handlers()
@@ -176,6 +176,10 @@ def test_clearing_raises_one_explained_alert(env):
     assert "hectares" in a["explanation_text"]
     assert "consistent with vegetation" in a["explanation_text"]
     assert json.loads(a["geometry_geojson"])["type"] == "MultiPolygon"
+    # Real rendered chips, not stubs: the overlay must be an actual PNG artifact.
+    for col in ("before_chip_id", "after_chip_id", "overlay_chip_id"):
+        blob = artifacts.read(con, a[col])
+        assert blob[:8] == b"\x89PNG\r\n\x1a\n", f"{col} is not a PNG"
 
     run = con.execute("SELECT * FROM run WHERE id=?", (a["run_id"],)).fetchone()
     assert run["status"] == "ok" and run["compute_backend"] == "local"
@@ -282,6 +286,76 @@ def test_properties_hold(env):
     _drain(con)
     after = dict(con.execute("SELECT * FROM run WHERE id=?", (run["id"],)).fetchone())
     assert before == after
+
+
+def test_duplicate_observation_write_returns_the_existing_row(env):
+    """sqlite's lastrowid after an ignored INSERT OR IGNORE is the *previous* insert's
+    id, never None, so 'lastrowid or SELECT' used to hand back an unrelated row."""
+    con, fake, pipeline = env
+    p = _project(con)
+    scene = fake._scene(datetime(2025, 6, 15, tzinfo=timezone.utc))
+    first = pipeline._write_observation(con, p, scene, 1.0, {}, "usable")
+    again = pipeline._write_observation(con, p, scene, 1.0, {}, "usable")
+    assert first == again
+    assert con.execute("SELECT COUNT(*) n FROM observation").fetchone()["n"] == 1
+
+
+def test_baseline_from_another_adapter_flags_provenance_discontinuity(env, monkeypatch):
+    """The baseline records the adapter that fitted it; a run served by a different
+    source must carry the caveat on the alert, not just in a log line."""
+    con, fake, pipeline = env
+    p = _project(con)
+    fake.event_date = "2025-06-01"
+    db.enqueue(con, "baseline", {"project_id": p["id"], "before": "2025-01-01"}, p["id"])
+    _drain(con)
+    other = FakeAdapter("other")
+    other.event_date = fake.event_date
+    monkeypatch.setattr(pipeline.adapters, "get_adapter", lambda name: other)
+    scene = fake._scene(datetime(2025, 6, 15, tzinfo=timezone.utc))
+    pipeline.run_scene(con, None, {"project_id": p["id"], "scene_id": scene.scene_id,
+                                   "adapter": "other", "item": scene.item,
+                                   "kind": "forward"})
+    a = con.execute("SELECT caveats_json FROM alert").fetchone()
+    assert a, "the clearing must still raise an alert"
+    assert "PROVENANCE_DISCONTINUITY" in json.loads(a["caveats_json"])
+
+
+def test_a_scene_scored_by_one_methodology_is_still_admitted_for_another(env):
+    """Two methodologies race: if the second's poll pass sees the observation the
+    first's run already wrote, it must still admit the scene — otherwise whichever
+    methodology's worker ran first would permanently blind the other."""
+    con, fake, pipeline = env
+    p = _project(con)
+    mid1 = db.methodology(con, p["id"])["id"]
+    mid2 = con.execute(
+        "INSERT INTO project_methodology(project_id,recipe_id,recipe_version,"
+        "params_json,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?)",
+        (p["id"], "burn_severity_optical", "1.0", "{}", "draft", db.now(),
+         db.now())).lastrowid
+    scene = fake._scene(datetime(2025, 6, 15, tzinfo=timezone.utc))
+    obs = pipeline._write_observation(con, p, scene, 1.0, {}, "usable")
+    con.execute(
+        "INSERT INTO run(uuid,project_id,methodology_id,kind,detector_id,"
+        "detector_version,params_json,target_observation_id,started_at,status,"
+        "compute_backend) VALUES (?,?,?,?,?,?,?,?,?,'ok','local')",
+        (db.new_uuid(), p["id"], mid1, "forward", "harmonic_residual", "1.0", "{}",
+         obs, db.now()))
+    recipe = RECIPES["vegetation_loss_optical"]
+    assert pipeline._admit(con, p, recipe, [scene], mid1) == []
+    admitted = pipeline._admit(con, p, recipe, [scene], mid2)
+    assert [s.scene_id for s in admitted] == [scene.scene_id]
+
+
+def test_overdue_fires_when_no_usable_observation_ever_arrived(env):
+    con, fake, pipeline = env
+    p = _project(con)
+    con.execute("UPDATE project SET created_at='2020-01-01T00:00:00+00:00' WHERE id=?",
+                (p["id"],))
+    p = con.execute("SELECT * FROM project WHERE id=?", (p["id"],)).fetchone()
+    pipeline._check_overdue(con, p, RECIPES["vegetation_loss_optical"])
+    codes = {r["code"] for r in con.execute(
+        "SELECT code FROM diagnostic WHERE project_id=?", (p["id"],))}
+    assert "ACQUISITION_OVERDUE" in codes
 
 
 def test_gee_serves_baseline_and_backtest_but_never_forward(env, monkeypatch):

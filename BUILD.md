@@ -26,7 +26,7 @@ tracking. Nothing from the original brief has been removed.
 
 ## Progress dashboard
 
-Last updated: 2026-08-22 · 80 tests passing (`.venv/bin/python -m pytest tests -q`)
+Last updated: 2026-08-27 · 91 tests passing, 4 network-gated skips (`.venv/bin/python -m pytest tests -q`)
 
 | Phase | Name | Status | Demo criterion |
 |---|---|---|---|
@@ -159,9 +159,14 @@ docker-compose.yml        api + worker + tiler
 recipes/*.yaml            the recipe catalogue, one file per recipe
 terrawatch/
   db.py                   schema, connection, job queue, diagnostics
+  config.py               config.yaml loader with TW_SECTION__KEY env overrides
+  log.py                  structured JSON logging with rotation
+  geo.py                  AOI helpers: cleaning, area, analysis CRS, cron suggestion
   adapters.py             STAC source adapters
+  gee.py                  optional Google Earth Engine backend (P10)
   masks.py                mask chain
   dem.py                  GLO-30 elevation and slope on the analysis grid
+  baseline.py             baseline serialisation: multi-band COG + JSON sidecar
   detectors.py            detector contract + implementations
   recipes.py              recipe registry loader
   pipeline.py             the 12-stage run pipeline
@@ -174,6 +179,8 @@ terrawatch/
   worker.py               job runner
   scheduler.py            APScheduler wiring
   notify.py               notification channels
+  vlm.py                  optional vision-language explanation layer
+  constellation.py        constellation-events lookup
   constellation_events.json
 frontend/                 React 18 + TypeScript + Vite
 tests/                    unit, golden fixture, and property tests
@@ -1380,7 +1387,11 @@ signed short-lived token issued by the API.
 - [x] `/health`: adapters, worker, queue depth, storage → P0
 - [x] Export endpoint → P9
 - [x] Cursor pagination on every list endpoint → P4
-- [x] Signed short-lived tile tokens → P4
+- [~] Signed short-lived tile tokens → P4 · the token endpoint and the unused TiTiler
+  service were removed in the 2026-08 audit fixes: tokens were issued but nothing ever
+  verified or consumed them. Overlays today are deck.gl vector geometry plus renderable
+  mask PNGs from the API; restore COG tiling (with verification on the tiler side)
+  when a use case needs it
 
 ---
 

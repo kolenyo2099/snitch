@@ -37,14 +37,23 @@ def in_episode(con, project_id: int, methodology_id: int) -> bool:
     return bool(json.loads(r["summary_json"]).get("in_episode"))
 
 
+def _headline(summary: dict) -> float | None:
+    """The polarity-correct extreme of a run's score. Falls back to score_p99 for
+    summaries written before the headline existed."""
+    value = summary.get("score_headline", summary.get("score_p99"))
+    return value if value is not None else None
+
+
 def severity(con, project_id: int, methodology_id: int, score: float) -> str:
     """Rule 6: position within this methodology's own historical score distribution."""
-    hist = [json.loads(r["summary_json"]).get("score_p99")
-            for r in con.execute("SELECT summary_json FROM run WHERE project_id=?"
-                                 " AND methodology_id=? AND status='ok'"
-                                 " AND summary_json IS NOT NULL",
-                                 (project_id, methodology_id))]
-    hist = [h for h in hist if h is not None]
+    hist = []
+    for r in con.execute("SELECT summary_json FROM run WHERE project_id=?"
+                         " AND methodology_id=? AND status='ok'"
+                         " AND summary_json IS NOT NULL",
+                         (project_id, methodology_id)):
+        h = _headline(json.loads(r["summary_json"]))
+        if h is not None:
+            hist.append(h)
     if len(hist) < 10:
         return "low"
     if score >= np.percentile(hist, 99):
@@ -55,7 +64,7 @@ def severity(con, project_id: int, methodology_id: int, score: float) -> str:
 
 
 def history(con, project_id: int, methodology_id: int) -> list[float]:
-    return [h for h in (json.loads(r["summary_json"] or "{}").get("score_p99")
+    return [h for h in (_headline(json.loads(r["summary_json"] or "{}"))
             for r in con.execute("SELECT summary_json FROM run WHERE project_id=?"
                                  " AND methodology_id=? AND status='ok'",
                                  (project_id, methodology_id))) if h is not None]

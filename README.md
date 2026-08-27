@@ -12,7 +12,7 @@ Sentinel-1 or Sentinel-2 imagery crosses your threshold.
 docker compose up -d --build
 ```
 
-API at <http://localhost:8000/api/v1/health>, tiles at <http://localhost:8001>.
+API at <http://localhost:8000/api/v1/health>.
 
 ## Develop
 

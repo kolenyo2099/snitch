@@ -12,10 +12,14 @@ type Tick = {
 
 const COLOR = { scored: "var(--green)", gated: "var(--amber)", none: "var(--grey)" };
 
-export function Timeline({ observations, runs, threshold, units, onSelect }: {
+export function Timeline({ observations, runs, threshold, units, polarity, onSelect }: {
   observations: Observation[]; runs: Run[]; threshold: number;
-  units: string; onSelect?: (t: Tick) => void;
+  units: string; polarity?: string; onSelect?: (t: Tick) => void;
 }) {
+  /* Not every detector alerts on a high score: p-value detectors alert on a score at
+   * or *below* the threshold, so the crossing test runs the other way for them. */
+  const lower = polarity === "lower_is_more_change";
+  const crosses = (s: number) => (lower ? s <= threshold : s >= threshold);
   const ticks = useMemo<Tick[]>(() => {
     const byObs = new Map(runs.filter(r => r.target_observation_id)
       .map(r => [r.target_observation_id!, r]));
@@ -76,14 +80,14 @@ export function Timeline({ observations, runs, threshold, units, onSelect }: {
           <g key={t.date + i} className="tick" onClick={() => onSelect?.(t)}>
             <title>
               {t.date} — {t.state === "scored"
-                ? `scored, p99 ${t.score?.toFixed(2)} ${units}, ${(t.obs!.valid_fraction * 100).toFixed(0)}% usable`
+                ? `scored, ${t.score?.toFixed(2)} ${units}, ${(t.obs!.valid_fraction * 100).toFixed(0)}% usable`
                 : t.state === "gated"
                   ? `observed but not scored: ${t.obs?.rejection_reason || "below the valid-pixel gate"}`
                   : "no acquisition covering this site"}
             </title>
             {t.score != null && (
-              <circle cx={x(i)} cy={y(t.score)} r={t.score >= threshold ? 4 : 2.5}
-                      fill={t.score >= threshold ? "var(--red)" : "var(--accent)"} />
+              <circle cx={x(i)} cy={y(t.score)} r={crosses(t.score) ? 4 : 2.5}
+                      fill={crosses(t.score) ? "var(--red)" : "var(--accent)"} />
             )}
             <rect x={x(i) - 4} y={TRACK + 8} width={8} height={t.state === "none" ? 8 : 16}
                   rx={2} fill={COLOR[t.state]}

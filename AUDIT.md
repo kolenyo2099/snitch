@@ -4,6 +4,13 @@
 `README.md`, `recipes/*.yaml`, and the code in `terrawatch/`, `frontend/src/`, `tests/`,
 and the Docker/deployment files.
 
+**Status:** C1–C3, H1, H2 (scaffolding removed), H4, the §5 doc drift, and §7 priority
+item 6 were fixed in the commits immediately after this audit (including the trivial
+hardening items: severity headline, overdue-from-activation, feed cursor/date filters,
+Timeline polarity, GEE before-frames, constant-time password compare). Still open:
+H3 golden fixtures, §3.12 cdse `ADAPTER_FALLBACK` coalescing, §3.13 performance hot
+spots, and §4's notes on failed-run records for stages 3–5 and the Wishart NaN convention.
+
 **Method:** every source file was read in full (≈8,800 lines). Suspected defects were
 verified by executing code in the project's own `.venv` (results quoted below). The test
 suite was run: **91 passed, 4 skipped, in 5 s** (`BUILD.md`'s dashboard still says

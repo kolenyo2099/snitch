@@ -39,5 +39,5 @@ reference:
   note: "The local path iterates regularised IR-MAD to convergence or 50 iterations and reports CVA direction in NDVI/NBR space."
 limitations:
   - "This is bitemporal and has no inherent notion of seasonality. Phenology can look like change."
-  - "The same-season window is recorded as a default parameter but is not yet enforced by scene admission."
+  - "Season matching narrows the comparison to the same calendar month; it constrains the baseline reference, not which scenes are admitted. The all-season fallback and any explicit override are recorded on every run."
   - "Use a specific recipe whenever you know what kind of change matters."

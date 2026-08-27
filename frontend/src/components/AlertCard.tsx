@@ -54,7 +54,7 @@ export function DiagnosticCard({ d, onAck }: { d: Diagnostic; onAck?: () => void
         <div className="spread">
           <div className="row">
             <span className="chip mono">{d.code}</span>
-            <span className="chip sev-high">{d.severity}</span>
+            <span className={`chip sev-${d.severity}`}>{d.severity}</span>
             <span className="muted tiny">{d.occurred_at.replace("T", " ").slice(0, 16)}</span>
           </div>
           {onAck && !d.acknowledged && <button onClick={onAck}>Acknowledge</button>}

@@ -2,9 +2,13 @@
 import json, os, sqlite3, uuid
 from datetime import datetime, timezone
 
+from .config import data_dir
 from .log import log
 
-DATA_DIR = os.environ.get("TW_DATA_DIR", os.path.join(os.getcwd(), "data"))
+# One resolution for every stored thing: the config layer handles TW_DATA_DIR and the
+# storage.data_dir key, so the database, artifacts and logs cannot end up in different
+# trees depending on which module resolved the path first.
+DATA_DIR = data_dir()
 DB_PATH = os.path.join(DATA_DIR, "terrawatch.db")
 # Kept separate from DB_PATH on purpose; see scheduler.start().
 SCHEDULER_DB_PATH = os.path.join(DATA_DIR, "scheduler.db")

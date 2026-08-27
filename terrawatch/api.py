@@ -42,7 +42,9 @@ def con():
 async def _password_gate(request: Request, call_next):
     pw = config.get("ui.password")
     if pw and request.url.path.startswith(V1) and request.url.path != f"{V1}/health":
-        if request.headers.get("x-terrawatch-password") != pw:
+        import hmac
+        if not hmac.compare_digest(request.headers.get("x-terrawatch-password") or "",
+                                   pw):
             return JSONResponse({"detail": "unauthorized"}, status_code=401)
     return await call_next(request)
 
@@ -423,13 +425,19 @@ def start_backtest(uuid: str, years: int = 3, methodology: int | None = None,
 
 
 @app.get(f"{V1}/projects/{{uuid}}/backtest")
-def backtest_status(uuid: str, c=Depends(con)):
+def backtest_status(uuid: str, methodology: int | None = None, c=Depends(con)):
+    """Calibration status. Scores from different methodologies are different
+    quantities on different scales, so `methodology` scopes the distribution; without
+    it a single-methodology project behaves exactly as before."""
     p = _project(c, uuid)
     job = c.execute("SELECT * FROM job WHERE kind='backtest' AND project_id=?"
                     " ORDER BY id DESC LIMIT 1", (p["id"],)).fetchone()
-    runs = [_row(r) for r in c.execute(
-        "SELECT * FROM run WHERE project_id=? AND kind='backtest'"
-        " ORDER BY started_at", (p["id"],))]
+    sql = "SELECT * FROM run WHERE project_id=? AND kind='backtest'"
+    args: list[Any] = [p["id"]]
+    if methodology is not None:
+        sql += " AND methodology_id=?"
+        args.append(methodology)
+    runs = [_row(r) for r in c.execute(sql + " ORDER BY started_at", args)]
     scores = [r["summary"].get("score_headline", r["summary"].get("score_p99"))
               for r in runs
               if r.get("summary", {}).get("score_headline",
@@ -533,30 +541,49 @@ def incidents(uuid: str, c=Depends(con), limit: int = 100, cursor: int | None = 
 # --- feed, diagnostics, registries, health ---------------------------------
 
 @app.get(f"{V1}/feed")
-def feed(c=Depends(con), limit: int = 50, cursor: int | None = None,
+def feed(c=Depends(con), limit: int = 50, cursor: str | None = None,
          severity: str | None = None, user_status: str | None = None,
-         project: str | None = None):
-    """Unified reverse-chronological feed of alerts + error diagnostics (§13.1)."""
+         project: str | None = None, date_from: str | None = None,
+         date_to: str | None = None):
+    """Unified reverse-chronological feed of alerts + error diagnostics (§13.1).
+
+    `cursor` is the sort timestamp of the oldest item on the previous page; `date_from`
+    and `date_to` (YYYY-MM-DD, inclusive) narrow the window. """
     a = ("SELECT a.*, p.name AS project_name, p.uuid AS project_uuid FROM alert a"
          " JOIN project p ON p.id=a.project_id WHERE 1=1")
+    d = ("SELECT * FROM diagnostic WHERE severity='error' AND acknowledged=0"
+         " AND resolved_at IS NULL")
     args: list[Any] = []
+    dargs: list[Any] = []
     if severity:
         a += " AND a.severity=?"; args.append(severity)
     if user_status:
         a += " AND a.user_status=?"; args.append(user_status)
     if project:
         a += " AND p.uuid=?"; args.append(project)
+    if cursor:
+        a += " AND a.sensed_at < ?"; args.append(cursor)
+        d += " AND occurred_at < ?"; dargs.append(cursor)
+    if date_from:
+        a += " AND a.sensed_at >= ?"; args.append(date_from)
+        d += " AND occurred_at >= ?"; dargs.append(date_from)
+    if date_to:
+        a += " AND a.sensed_at <= ?"; args.append(f"{date_to}T23:59:59")
+        d += " AND occurred_at <= ?"; dargs.append(f"{date_to}T23:59:59")
     items = [dict(_row(r), _type="alert") for r in
              c.execute(a + " ORDER BY a.sensed_at DESC LIMIT ?", (*args, limit))]
     diags = [dict(_row(r), _type="diagnostic") for r in c.execute(
-        "SELECT * FROM diagnostic WHERE severity='error' AND acknowledged=0 "
-        "AND resolved_at IS NULL "
-        "ORDER BY occurred_at DESC"
-        " LIMIT ?", (limit,))]
+        d + " ORDER BY occurred_at DESC LIMIT ?", (*dargs, limit))]
     merged = sorted(items + diags,
                     key=lambda x: x.get("sensed_at") or x.get("occurred_at"),
-                    reverse=True)[:limit]
-    return {"items": merged}
+                    reverse=True)
+    # Keyset by the merge sort key: if either source still had rows at the cut, the
+    # oldest returned item is the next page's cursor.
+    next_cursor = None
+    if len(merged) > limit:
+        last = merged[limit - 1]
+        next_cursor = last.get("sensed_at") or last.get("occurred_at")
+    return {"items": merged[:limit], "next_cursor": next_cursor}
 
 
 @app.get(f"{V1}/diagnostics")
@@ -603,7 +630,8 @@ def health(c=Depends(con), check_adapters: bool = False):
     return {"ok": True, "queue": queue, "adapters": ad,
             "credentials": config.credential_status(),
             "gee": {"configured": gee.configured(), **gee.quota(c)},
-            "storage": artifacts.usage(),
+            "storage": {**artifacts.usage(),
+                        "gc_enabled": bool(config.get("storage.gc_enabled", False))},
             "projects": c.execute(
                 "SELECT COUNT(*) n FROM project WHERE status='active'").fetchone()["n"]}
 
@@ -688,20 +716,6 @@ def artifact_overlay_png(artifact_id: int, c=Depends(con)):
     out = io.BytesIO()
     Image.fromarray(rgba, "RGBA").save(out, format="PNG", optimize=True)
     return Response(out.getvalue(), media_type="image/png")
-
-
-@app.get(f"{V1}/artifacts/{{artifact_id}}/token")
-def tile_token(artifact_id: int, c=Depends(con)):
-    """Short-lived signed token for the tiler (spec §14)."""
-    import hashlib, hmac, time
-    r = c.execute("SELECT sha256 FROM artifact WHERE id=?", (artifact_id,)).fetchone()
-    if not r:
-        raise HTTPException(404, "artifact not found")
-    exp = int(time.time()) + 900
-    secret = (config.get("ui.password") or "terrawatch").encode()
-    sig = hmac.new(secret, f"{r['sha256']}:{exp}".encode(), hashlib.sha256).hexdigest()[:32]
-    return {"sha256": r["sha256"], "expires": exp, "token": sig,
-            "url": f"/tiles/{r['sha256']}/{{z}}/{{x}}/{{y}}.png?exp={exp}&sig={sig}"}
 
 
 @app.post(f"{V1}/maintenance/gc")

@@ -104,6 +104,13 @@ export default function Settings() {
               Delete unreferenced artifacts
             </button>
           </div>
+          {health && !health.storage?.gc_enabled && (
+            <p className="tiny muted">
+              Deletion is disabled by <code>storage.gc_enabled: false</code> in
+              config.yaml — the preview works, the delete button will be refused until
+              you enable it.
+            </p>
+          )}
           {gcResult && (
             <p className="tiny muted">
               {gcResult.dry_run ? "Would delete" : "Deleted"} {gcResult.count} artifacts

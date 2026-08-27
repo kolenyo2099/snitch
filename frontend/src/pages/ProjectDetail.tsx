@@ -137,6 +137,7 @@ export default function ProjectDetail() {
         <div className="panel">
           <Timeline observations={obs} runs={runs} threshold={threshold}
                     units={latestRun?.summary?.units || ""}
+                    polarity={latestRun?.summary?.polarity}
                     onSelect={(t) => t.run && (window.location.href = `/runs/${t.run.uuid}`)} />
           <p className="tiny muted" style={{ marginTop: 10 }}>
             Click a scored tick to open its run. Amber means the scene arrived but too

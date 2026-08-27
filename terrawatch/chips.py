@@ -11,16 +11,18 @@ MAX_PX = 768
 
 
 def display_bands(recipe: dict) -> tuple:
-    """Three bands to draw. Optical recipes get true colour; radar recipes have no
-    RGB to give, so VV/VH/VV is used as a false-colour composite — legible, and
-    labelled on the chip so nobody mistakes it for a photograph."""
-    b = [x for x in RGB if x in recipe["bands"]]
-    if b:
-        return tuple(b)
-    b = list(recipe["bands"])[:3]
-    while b and len(b) < 3:
-        b.append(b[0])
-    return tuple(b) or RGB
+    """Three bands to draw. Optical recipes get true colour when B04/B03/B02 are
+    all in the recipe; otherwise the loaded bands stand in, in recipe order — radar
+    recipes therefore get VV/VH/VV as a false-colour composite. Legible either way,
+    and labelled on the chip so nobody mistakes it for a photograph. The result is
+    always exactly three bands: a one- or two-band frame cannot be rendered as a PNG."""
+    bands = [x for x in recipe["bands"] if x != "SCL"]
+    chosen = [x for x in RGB if x in bands]
+    chosen += [x for x in bands if x not in chosen]
+    chosen = chosen[:3]
+    while chosen and len(chosen) < 3:
+        chosen.append(chosen[0])
+    return tuple(chosen) or RGB
 
 
 def stretch_from(data: dict, bands=RGB, lo_pct=2.0, hi_pct=98.0) -> dict:

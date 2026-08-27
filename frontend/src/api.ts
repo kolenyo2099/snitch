@@ -44,7 +44,8 @@ export const api = {
   startBacktest: (u: string, years = 3, m?: number) =>
     req<any>(`/projects/${u}/backtest?years=${years}${m ? `&methodology=${m}` : ""}`,
              { method: "POST" }),
-  backtest: (u: string) => req<any>(`/projects/${u}/backtest`),
+  backtest: (u: string, m?: number) =>
+    req<any>(`/projects/${u}/backtest${m ? `?methodology=${m}` : ""}`),
   setThreshold: (u: string, body: any, m?: number) =>
     req<any>(`/projects/${u}/threshold${m ? `?methodology=${m}` : ""}`,
              { method: "POST", body: JSON.stringify(body) }),
@@ -65,7 +66,6 @@ export const api = {
     req<any>(`/diagnostics/${id}/acknowledge`, { method: "POST" }),
   recipes: () => req<any[]>("/recipes"),
   detectors: () => req<any[]>("/detectors"),
-  tileToken: (id: number) => req<any>(`/artifacts/${id}/token`),
   artifactOverlay: (id: number) => req<any>(`/artifacts/${id}/overlay`),
   gc: (dry = true) => req<any>(`/maintenance/gc?dry_run=${dry}`, { method: "POST" }),
 };

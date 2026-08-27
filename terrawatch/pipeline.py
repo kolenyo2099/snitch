@@ -93,7 +93,7 @@ def _poll_one(con, job, payload, methodology_id: int):
                       f"{end.date()}.", project_id=p["id"])
     _check_overdue(con, p, recipe)
     n = 0
-    for s in _admit(con, p, recipe, scenes):
+    for s in _admit(con, p, recipe, scenes, m["id"]):
         db.enqueue(con, "run", {"project_id": p["id"], "methodology_id": m["id"],
                                 "scene_id": s.scene_id, "adapter": adapter.name,
                                 "item": s.item, "kind": "forward"}, p["id"])
@@ -117,12 +117,26 @@ def _orbit_reason(project, recipe, scene) -> str | None:
     return None
 
 
-def _admit(con, project, recipe, scenes):
-    """Stage 2. Rejected scenes are still written to `observation`."""
+def _admit(con, project, recipe, scenes, methodology_id: int):
+    """Stage 2. Rejected scenes are still written to `observation`.
+
+    "Already seen" is judged per methodology: a scene another methodology has scored
+    must still be admitted here, or the second methodology would permanently miss
+    everything the first one happened to run first (their workers race). Only
+    scene-intrinsic rejections — coverage and orbit/pass, not mask-chain outcomes —
+    are shared project-wide, because those re-reject identically for every methodology
+    on the same sensor."""
     from shapely.geometry import shape
     aoi = shape(json.loads(project["aoi_geojson"]))
     seen = {r["scene_id"] for r in con.execute(
-        "SELECT scene_id FROM observation WHERE project_id=?", (project["id"],))}
+        "SELECT scene_id FROM observation WHERE project_id=? AND status='rejected'"
+        " AND (rejection_reason LIKE 'AOI coverage%'"
+        "      OR rejection_reason LIKE 'relative orbit%'"
+        "      OR rejection_reason LIKE 'pass direction%')"
+        " UNION SELECT o.scene_id FROM run r"
+        " JOIN observation o ON o.id=r.target_observation_id"
+        " WHERE r.project_id=? AND r.methodology_id=? AND r.status='ok'",
+        (project["id"], project["id"], methodology_id))}
     out = []
     for s in scenes:
         if s.scene_id in seen:
@@ -148,7 +162,7 @@ def _admit(con, project, recipe, scenes):
 
 def _write_observation(con, project, scene, valid_fraction, mask_summary, status,
                        rejection_reason=None, adapter_name=None):
-    return con.execute(
+    cur = con.execute(
         "INSERT OR IGNORE INTO observation(project_id,scene_id,platform,collection,"
         "adapter,sensed_at,discovered_at,relative_orbit,pass_direction,valid_fraction,"
         "cloud_fraction,mask_summary_json,status,rejection_reason,source_uri,"
@@ -157,28 +171,36 @@ def _write_observation(con, project, scene, valid_fraction, mask_summary, status
          adapter_name or scene.adapter, scene.datetime, db.now(),
          scene.relative_orbit, scene.pass_direction, valid_fraction,
          scene.cloud_cover, json.dumps(mask_summary), status, rejection_reason,
-         scene.source_uri, json.dumps(scene.item))).lastrowid or con.execute(
+         scene.source_uri, json.dumps(scene.item)))
+    if cur.rowcount:
+        return cur.lastrowid
+    # The insert was ignored (scene already observed). sqlite's lastrowid keeps the
+    # *previous* insert's id in that case — it is never None — so the row count is the
+    # only reliable "did this insert happen" signal.
+    return con.execute(
         "SELECT id FROM observation WHERE project_id=? AND scene_id=?",
         (project["id"], scene.scene_id)).fetchone()["id"]
 
 
 def _check_overdue(con, project, recipe):
-    last = con.execute("SELECT MAX(sensed_at) t FROM observation WHERE project_id=?"
-                       " AND status='usable'", (project["id"],)).fetchone()["t"]
-    if not last:
-        return
+    row = con.execute("SELECT MAX(sensed_at) t FROM observation WHERE project_id=?"
+                      " AND status='usable'", (project["id"],)).fetchone()
+    # A site that has never returned a usable scene is overdue too, counted from
+    # activation — silence from day one is exactly the case worth shouting about.
+    last = row["t"] or project["created_at"]
     revisit = 6 if recipe["sensor"] == "S1" else 5
     days = (datetime.now(timezone.utc) - _dt(last)).days
     if days > revisit * 3:
         db.diagnostic(con, "ACQUISITION_OVERDUE", "warning",
                       f"No usable observation for {days} days "
-                      f"({days // revisit} expected revisit cycles).",
+                      f"({days // revisit} expected revisit cycles"
+                      f"{'; none has ever been usable' if not row['t'] else ''}).",
                       project_id=project["id"])
 
 
 # --- stages 3-5: load, mask, gate ------------------------------------------
 
-def _load_masked(con, project, recipe, adapter, scene):
+def _load_masked(con, project, m, recipe, adapter, scene):
     aoi = json.loads(project["aoi_geojson"])
     det = DETECTORS[recipe["detector"]]
     bands = list(recipe["bands"])
@@ -190,7 +212,11 @@ def _load_masked(con, project, recipe, adapter, scene):
         adapter, scene, aoi, bands,
         resolution=recipe.get("resolution_m"), target_crs=project["analysis_crs"],
         buffer_px=getattr(det.spec, "kernel_radius_px", 0))
-    mask_params = {**json.loads(project["params_json"]), "_aoi": aoi}
+    # Mask parameters come from the addressed methodology first: two methodologies on
+    # one AOI can need different exclusions (max_slope_deg, cloud thresholds), and the
+    # project row only mirrors whichever methodology was created first.
+    mask_params = {**json.loads(project["params_json"]),
+                   **json.loads(m["params_json"]), "_aoi": aoi}
     invalid, summary, valid_fraction = masks.apply_chain(data, recipe["mask_chain"],
                                                          mask_params)
     absent = [k for k, v in summary.items() if v is None]
@@ -389,7 +415,7 @@ def fit_baseline(con, job, payload):
                     f"Fitting baseline: reading {s.datetime[:10]} "
                     f"({i + 1} of {len(scenes)})")
         try:
-            data, invalid, summary, vf = _load_masked(con, p, recipe, adapter, s)
+            data, invalid, summary, vf = _load_masked(con, p, m, recipe, adapter, s)
         except Exception as e:  # noqa: BLE001
             log.warning("baseline scene skipped", extra={"extra": {
                 "scene": s.scene_id, "error": str(e)}})
@@ -449,7 +475,7 @@ def fit_baseline(con, job, payload):
                           "The optical stream remains usable.", project_id=p["id"])
     dates = (min(s.datetime for s in scenes), max(s.datetime for s in scenes))
     aid = bl.save(con, fitted, crs, transform, obs_ids, dates,
-                  det.spec.id, det.spec.version)
+                  det.spec.id, det.spec.version, adapter=adapter.name)
     if adapter.name == "gee":
         params["_gee_sidecar_artifact_id"] = gee.sidecar(
             con, p["id"], "baseline",
@@ -475,20 +501,28 @@ def fit_baseline(con, job, payload):
 
 # --- stages 7-12: score through notify -------------------------------------
 
+def _scene_ref_from_item(item: dict, adapter_name: str,
+                         scene_id: str | None = None) -> adapters.SceneRef:
+    """Rebuild a SceneRef from a stored STAC item — run payloads and chip before-frames
+    both persist whole items, so a scene can be re-fetched without a catalogue hit."""
+    p = item.get("properties", {})
+    return adapters.SceneRef(
+        scene_id=scene_id or item["id"],
+        platform=p.get("platform", "unknown"),
+        datetime=p["datetime"],
+        collection=item.get("collection", ""),
+        adapter=adapter_name,
+        relative_orbit=p.get("sat:relative_orbit"),
+        pass_direction=(p.get("sat:orbit_state") or "").upper() or None,
+        source_uri=item.get("links", [{}])[0].get("href", ""),
+        item=item)
+
 @handler("run")
 def run_scene(con, job, payload):
     p, m, recipe, det, params, aoi = _ctx(con, payload["project_id"],
                                           payload.get("methodology_id"))
-    scene = adapters.SceneRef(
-        scene_id=payload["scene_id"], platform=payload["item"]["properties"].get(
-            "platform", "unknown"),
-        datetime=payload["item"]["properties"]["datetime"],
-        collection=payload["item"].get("collection", ""), adapter=payload["adapter"],
-        relative_orbit=payload["item"]["properties"].get("sat:relative_orbit"),
-        pass_direction=(payload["item"]["properties"].get("sat:orbit_state") or "").upper()
-        or None,
-        source_uri=payload["item"].get("links", [{}])[0].get("href", ""),
-        item=payload["item"])
+    scene = _scene_ref_from_item(payload["item"], payload["adapter"],
+                                 scene_id=payload["scene_id"])
     adapter = _adapter_named(con, p, payload["adapter"])
     kind = payload.get("kind", "forward")
     # Reproducibility-relevant: a GEE-served run is marked as one everywhere.
@@ -503,7 +537,7 @@ def run_scene(con, job, payload):
                                  + timedelta(minutes=1)).isoformat(timespec="seconds"))
         return {"deferred": "baseline"}
 
-    data, invalid, summary, vf = _load_masked(con, p, recipe, adapter, scene)
+    data, invalid, summary, vf = _load_masked(con, p, m, recipe, adapter, scene)
     if _gate(con, p, recipe, scene, vf, summary, adapter.name):
         return {"gated": True}
     obs_id = _write_observation(con, p, scene, vf, summary, "usable",
@@ -557,7 +591,8 @@ def run_scene(con, job, payload):
                                   "shift_yx_px": shift_yx.tolist(),
                                   "edge_pixels_invalidated": edge_pixels}
             else:
-                caveats.append("MISREGISTRATION")
+                # No caveat here on purpose: the run aborts, and an aborted run never
+                # produces the alert that would carry it. The diagnostic is the record.
                 raise RuntimeError(f"misregistration {shift:.2f} px exceeds tolerance")
 
         score_params = params
@@ -792,6 +827,7 @@ def run_scene(con, job, payload):
 
 def _render_chips(con, project, recipe, adapter, base, after_data, mask, scene, params):
     """Before frame is the last usable pre-event observation, same stretch as after."""
+    aoi = json.loads(project["aoi_geojson"])
     prev = con.execute(
         "SELECT stac_item_json FROM observation WHERE project_id=? AND status='usable'"
         " AND sensed_at < ? ORDER BY sensed_at DESC LIMIT 1",
@@ -801,10 +837,13 @@ def _render_chips(con, project, recipe, adapter, base, after_data, mask, scene, 
     before = after_data
     if prev:
         try:
-            ref = adapters.StacAdapter(adapter.name)._ref(json.loads(
-                prev["stac_item_json"]))
+            # Loaded through the run's own adapter (local STAC or GEE alike), on the
+            # run's analysis grid — a before frame on a different grid would compare
+            # nothing. Falls back loud rather than shipping an identical pair quietly.
+            ref = _scene_ref_from_item(json.loads(prev["stac_item_json"]),
+                                       adapter.name)
             before = adapters.load_scene(
-                adapter, ref, json.loads(project["aoi_geojson"]), list(bands),
+                adapter, ref, aoi, list(bands),
                 resolution=recipe.get("resolution_m"),
                 target_crs=project["analysis_crs"])
         except Exception as e:  # noqa: BLE001

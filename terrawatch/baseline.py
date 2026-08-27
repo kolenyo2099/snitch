@@ -7,7 +7,8 @@ from . import artifacts
 
 
 def save(con, baseline: dict, crs: str, transform, observation_ids: list[int],
-         date_range: tuple[str, str], detector_id: str, detector_version: str) -> int:
+         date_range: tuple[str, str], detector_id: str, detector_version: str,
+         adapter: str | None = None) -> int:
     names, planes = [], []
     for idx in sorted(baseline["coef"]):
         coef = baseline["coef"][idx]
@@ -20,7 +21,12 @@ def save(con, baseline: dict, crs: str, transform, observation_ids: list[int],
             "n_obs": baseline["n_obs"], "day0": baseline["day0"],
             "observation_ids": observation_ids,
             "fitted_from": date_range[0], "fitted_to": date_range[1],
-            "detector_id": detector_id, "detector_version": detector_version}
+            "detector_id": detector_id, "detector_version": detector_version,
+            # The serving adapter: compared against each run's adapter so a run fed
+            # by a different source than its baseline is flagged
+            # (PROVENANCE_DISCONTINUITY). Baselines fitted before this field existed
+            # read as unknown, which matches every adapter rather than failing.
+            "adapter": adapter}
     return artifacts.put_cog(con, np.stack(planes).astype("float32"), crs, transform,
                              meta=meta)
 

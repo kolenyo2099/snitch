@@ -37,5 +37,5 @@ limitations:
   - "The source method is tuned for tropical forest and needs recalibration elsewhere."
   - "Large uniform clearings may confirm more slowly than edges."
   - "The detector reports disturbance, not whether it was human or natural."
-  - "Confirmation currently uses consecutive spatially overlapping alerts; persistent Bayesian state is not yet stored per pixel."
+  - "A first flag is always provisional; confirmation needs a later observation whose accumulated disturbance probability crosses the confirmation threshold inside the retained footprint."
   - "Only observations from the project's own relative orbit and pass direction are compared."

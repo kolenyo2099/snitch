@@ -20,11 +20,3 @@ services:
     restart: unless-stopped
     # scale with: docker compose up -d --scale worker=3
 
-  tiler:
-    image: ghcr.io/developmentseed/titiler:latest
-    ports: ["8001:8000"]
-    volumes: ["./data/artifacts:/data/artifacts:ro"]   # read-only by design
-    environment:
-      TITILER_API_CORS_ORIGINS: "*"
-      GDAL_DISABLE_READDIR_ON_OPEN: EMPTY_DIR
-    restart: unless-stopped

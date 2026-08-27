@@ -267,7 +267,12 @@ def load_scene(adapter, scene: SceneRef, aoi: dict, bands: list[str],
         loaded = adapter.load(scene, aoi, bands, resolution=resolution,
                               target_crs=target_crs, buffer_px=buffer_px)
     else:
-        loaded = adapter.load(scene, aoi, bands)
+        try:
+            loaded = adapter.load(scene, aoi, bands, resolution=resolution,
+                                  target_crs=target_crs, buffer_px=buffer_px)
+        except TypeError:
+            # Three-argument synthetic fixtures: no grid control, and none needed.
+            loaded = adapter.load(scene, aoi, bands)
     return as_array_dict(loaded)
 
 

@@ -46,6 +46,8 @@ export default function Wizard() {
   const [orbit, setOrbit] = useState<any>(null);
 
   const [uuid, setUuid] = useState<string>();
+  const [methId, setMethId] = useState<number>();
+  const [backtestArtifact, setBacktestArtifact] = useState<number | null>(null);
   const [runs, setRuns] = useState<Run[]>([]);
   const [threshold, setThreshold] = useState(0);
   const [usedDefault, setUsedDefault] = useState(false);
@@ -101,9 +103,11 @@ export default function Wizard() {
           ? { adapter_preference: ["cdse", "earthsearch", "planetary"] } : {}),
       });
       setUuid(p.uuid);
+      const primary = (p.methodologies as any[] | undefined)?.[0];
+      setMethId(primary?.id);
       setThreshold(p.params.threshold ?? recipe?.defaults.threshold ?? 0);
       setCron(p.schedule_cron);
-      await api.startBacktest(p.uuid, BACKTEST_YEARS);
+      await api.startBacktest(p.uuid, BACKTEST_YEARS, primary?.id);
       setBacktesting(true);
       setStep(2);
     } catch (e: any) { setErr(e.message); }
@@ -114,15 +118,19 @@ export default function Wizard() {
   useEffect(() => {
     if (!uuid || !backtesting) return;
     const t = setInterval(async () => {
-      const b = await api.backtest(uuid);
+      const b = await api.backtest(uuid, methId);
       setRuns(b.runs || []);
+      // The newest scored raster stands in for "the calibration": recording it with
+      // the threshold is what makes method.md's provenance section truthful.
+      const ids: (number | null)[] = (b.runs || []).map((r: Run) => r.score_raster_id);
+      setBacktestArtifact(ids.filter((v): v is number => v != null).pop() ?? null);
       if (b.job && ["done", "failed"].includes(b.job.status)) {
         setBacktesting(false);
         if (b.job.status === "failed") setErr(b.job.last_error?.split("\n").pop());
       }
     }, 3000);
     return () => clearInterval(t);
-  }, [uuid, backtesting]);
+  }, [uuid, methId, backtesting]);
 
   const activate = async () => {
     if (!uuid) return;
@@ -130,7 +138,8 @@ export default function Wizard() {
     try {
       await api.setThreshold(uuid, {
         threshold, source: usedDefault ? "default" : "calibrated",
-      });
+        ...(backtestArtifact ? { backtest_artifact_id: backtestArtifact } : {}),
+      }, methId);
       await api.patchProject(uuid, { name: name || "Untitled monitor", schedule_cron: cron });
       await api.activate(uuid);
       nav(`/projects/${uuid}`);

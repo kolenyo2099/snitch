@@ -226,11 +226,30 @@ class StacAdapter:
             return {"adapter": self.name, "ok": False, "error": str(e)}
 
 
+_SAS_MAX_ATTEMPTS = 5
+
+
+def _sas_fetch(account: str, container: str) -> str:
+    """Mint a read SAS token, backing off on Planetary Computer's throttling.
+
+    The token endpoint is aggressively rate-limited. A bare retry (one per scene in a
+    backtest) turns a single 429 into a storm against the very endpoint that is already
+    throttling us, so honour Retry-After and back off with jitter instead."""
+    import random
+    url = f"{_SAS}/{account}/{container}"
+    for attempt in range(_SAS_MAX_ATTEMPTS):
+        r = httpx.get(url, timeout=30)
+        if r.status_code not in (429, 503) or attempt == _SAS_MAX_ATTEMPTS - 1:
+            r.raise_for_status()
+            return r.json()["token"]
+        wait = float(r.headers.get("Retry-After") or 2 ** attempt) + random.uniform(0, 0.5)
+        time.sleep(min(wait, 30.0))
+    raise RuntimeError("unreachable")  # pragma: no cover
+
+
 @lru_cache(maxsize=8)
 def _sas_token(account: str, container: str, _bucket: int = 0) -> str:
-    r = httpx.get(f"{_SAS}/{account}/{container}", timeout=30)
-    r.raise_for_status()
-    return r.json()["token"]
+    return _sas_fetch(account, container)
 
 
 def sas_token(account: str, container: str) -> str:

@@ -7,7 +7,7 @@ DIAGNOSTICS = {
     "NO_ACQUISITION": ("info", "Wait for the next scheduled pass or verify the AOI and date range."),
     "ACQUISITION_OVERDUE": ("warning", "Check source health; if optical scenes stay obscured, add a radar monitor."),
     "LOW_VALID_FRACTION": ("warning", "Wait for a clearer acquisition or lower the validity gate only after reviewing the mask."),
-    "PERSISTENT_OCCLUSION": ("error", "Pair this optical monitor with a radar recipe that can observe through clouds."),
+    "PERSISTENT_OCCLUSION": ("warning", "Pair this optical monitor with a radar recipe that can observe through clouds."),
     "MISREGISTRATION": ("warning", "Enable automatic co-registration or inspect the source imagery before retrying."),
     "ORBIT_MISMATCH": ("error", "Select the project's original relative orbit and pass direction."),
     "BASELINE_TOO_SHORT": ("error", "Extend the baseline window until the recipe has enough usable observations."),

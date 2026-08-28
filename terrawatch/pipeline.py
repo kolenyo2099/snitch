@@ -254,9 +254,15 @@ def _gate(con, project, recipe, scene, valid_fraction, summary, adapter_name):
 def _persistent_occlusion(con, project):
     recent = [r["status"] for r in con.execute(
         "SELECT status FROM observation WHERE project_id=? ORDER BY sensed_at DESC"
-        " LIMIT 3", (project["id"],))]
-    if len(recent) == 3 and all(s != "usable" for s in recent):
-        db.diagnostic(con, "PERSISTENT_OCCLUSION", "error",
+        " LIMIT 4", (project["id"],))]
+    # Fire once, on the transition INTO an occlusion episode: the 3 newest are all
+    # unusable and the scene just before them was usable (or there is none). As the
+    # streak lengthens the 4th entry becomes unusable too, so it won't re-fire until a
+    # usable scene resets it. Without this, a backtest over a cloudy site emitted the
+    # same alert once per cloudy scene (120 for one 3-year project).
+    if (len(recent) >= 3 and all(s != "usable" for s in recent[:3])
+            and (len(recent) == 3 or recent[3] == "usable")):
+        db.diagnostic(con, "PERSISTENT_OCCLUSION", "warning",
                       "Three or more consecutive acquisitions were unusable. This site "
                       "is currently unobservable with this recipe; consider pairing it "
                       "with a radar recipe.", project_id=project["id"])

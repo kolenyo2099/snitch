@@ -731,4 +731,16 @@ def garbage_collect(c=Depends(con), dry_run: bool = True):
 _DIST = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                      "frontend", "dist")
 if os.path.isdir(_DIST):
+    from starlette.exceptions import HTTPException as _StarletteHTTPException
+
+    @app.exception_handler(_StarletteHTTPException)
+    async def _spa_fallback(request: Request, exc: _StarletteHTTPException):
+        # A client-side route (/runs/<uuid>, /alerts/<uuid>, or any page refresh)
+        # is a real file only for /assets; everything else must return index.html so
+        # the SPA router can take over. API 404s stay JSON.
+        if (exc.status_code == 404 and request.method in ("GET", "HEAD")
+                and not request.url.path.startswith(V1)):
+            return FileResponse(os.path.join(_DIST, "index.html"))
+        return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+
     app.mount("/", StaticFiles(directory=_DIST, html=True), name="frontend")

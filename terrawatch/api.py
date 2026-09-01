@@ -111,11 +111,16 @@ def _row(r) -> dict:
 
 def _page(c, sql: str, params: tuple, limit: int, cursor: int | None):
     """Keyset pagination on the primary key, descending."""
+    base = sql
     sql += (" AND id < ?" if cursor else "") + " ORDER BY id DESC LIMIT ?"
     args = params + ((cursor,) if cursor else ()) + (limit + 1,)
     rows = [_row(r) for r in c.execute(sql, args)]
     nxt = rows[limit]["id"] if len(rows) > limit else None
-    return {"items": rows[:limit], "next_cursor": nxt}
+    # The caller renders "showing N of TOTAL"; without it a capped page is
+    # indistinguishable from the whole set, which is how 609 diagnostics silently
+    # became 100.
+    total = c.execute(f"SELECT COUNT(*) n FROM ({base})", params).fetchone()["n"]
+    return {"items": rows[:limit], "next_cursor": nxt, "total": total}
 
 
 def _project(c, uuid: str):
@@ -495,6 +500,11 @@ def run_detail(uuid: str, c=Depends(con)):
     if not r:
         raise HTTPException(404, "run not found")
     d = _row(r)
+    # A run detail page with no way back to its monitor is a dead end.
+    owner = c.execute("SELECT uuid, name FROM project WHERE id=?",
+                      (r["project_id"],)).fetchone()
+    if owner:
+        d["project_uuid"], d["project_name"] = owner["uuid"], owner["name"]
     d["observations"] = [_row(o) for o in c.execute(
         "SELECT * FROM observation WHERE id IN (SELECT value FROM json_each(?))"
         " OR id=?", (r["reference_observation_ids"] or "[]",
@@ -551,8 +561,14 @@ def feed(c=Depends(con), limit: int = 50, cursor: str | None = None,
     and `date_to` (YYYY-MM-DD, inclusive) narrow the window. """
     a = ("SELECT a.*, p.name AS project_name, p.uuid AS project_uuid FROM alert a"
          " JOIN project p ON p.id=a.project_id WHERE 1=1")
-    d = ("SELECT * FROM diagnostic WHERE severity='error' AND acknowledged=0"
-         " AND resolved_at IS NULL")
+    # LEFT JOIN, not JOIN: a diagnostic raised by the scheduler or a source adapter
+    # has no project, and must still reach the feed. Only rows belonging to a project
+    # the user deleted are dropped.
+    d = ("SELECT dg.*, p.name AS project_name, p.uuid AS project_uuid"
+         " FROM diagnostic dg LEFT JOIN project p ON p.id=dg.project_id"
+         " WHERE dg.severity='error' AND dg.acknowledged=0"
+         " AND dg.resolved_at IS NULL"
+         " AND (p.id IS NULL OR p.status != 'deleted')")
     args: list[Any] = []
     dargs: list[Any] = []
     if severity:
@@ -561,19 +577,20 @@ def feed(c=Depends(con), limit: int = 50, cursor: str | None = None,
         a += " AND a.user_status=?"; args.append(user_status)
     if project:
         a += " AND p.uuid=?"; args.append(project)
+        d += " AND p.uuid=?"; dargs.append(project)
     if cursor:
         a += " AND a.sensed_at < ?"; args.append(cursor)
-        d += " AND occurred_at < ?"; dargs.append(cursor)
+        d += " AND dg.occurred_at < ?"; dargs.append(cursor)
     if date_from:
         a += " AND a.sensed_at >= ?"; args.append(date_from)
-        d += " AND occurred_at >= ?"; dargs.append(date_from)
+        d += " AND dg.occurred_at >= ?"; dargs.append(date_from)
     if date_to:
         a += " AND a.sensed_at <= ?"; args.append(f"{date_to}T23:59:59")
-        d += " AND occurred_at <= ?"; dargs.append(f"{date_to}T23:59:59")
+        d += " AND dg.occurred_at <= ?"; dargs.append(f"{date_to}T23:59:59")
     items = [dict(_row(r), _type="alert") for r in
              c.execute(a + " ORDER BY a.sensed_at DESC LIMIT ?", (*args, limit))]
     diags = [dict(_row(r), _type="diagnostic") for r in c.execute(
-        d + " ORDER BY occurred_at DESC LIMIT ?", (*dargs, limit))]
+        d + " ORDER BY dg.occurred_at DESC LIMIT ?", (*dargs, limit))]
     merged = sorted(items + diags,
                     key=lambda x: x.get("sensed_at") or x.get("occurred_at"),
                     reverse=True)
@@ -603,6 +620,34 @@ def diagnostics(c=Depends(con), limit: int = 100, cursor: int | None = None,
     return _page(c, sql, tuple(args), limit, cursor)
 
 
+@app.get(f"{V1}/diagnostics/summary")
+def diagnostics_summary(c=Depends(con), project: str | None = None):
+    """One row per (code, severity): a repeated fault is one problem, not 609."""
+    sql = ("SELECT code, severity, COUNT(*) n, MAX(occurred_at) last_at,"
+           " MIN(occurred_at) first_at, MAX(id) latest_id"
+           " FROM diagnostic WHERE acknowledged=0 AND resolved_at IS NULL")
+    args: list[Any] = []
+    if project:
+        sql += " AND project_id=(SELECT id FROM project WHERE uuid=?)"
+        args.append(project)
+    sql += " GROUP BY code, severity ORDER BY last_at DESC"
+    return {"items": [_row(r) for r in c.execute(sql, tuple(args))]}
+
+
+@app.post(f"{V1}/diagnostics/acknowledge")
+def acknowledge_many(body: dict, c=Depends(con)):
+    """Acknowledge every open diagnostic sharing a code. Clearing 609 identical
+    warnings one button at a time is not a workflow anyone completes."""
+    sql = ("UPDATE diagnostic SET acknowledged=1 WHERE acknowledged=0"
+           " AND resolved_at IS NULL AND code=?")
+    args: list[Any] = [body["code"]]
+    if body.get("project"):
+        sql += " AND project_id=(SELECT id FROM project WHERE uuid=?)"
+        args.append(body["project"])
+    n = c.execute(sql, tuple(args)).rowcount
+    return {"ok": True, "acknowledged": n}
+
+
 @app.post(f"{V1}/diagnostics/{{diag_id}}/acknowledge")
 def acknowledge(diag_id: int, c=Depends(con)):
     c.execute("UPDATE diagnostic SET acknowledged=1 WHERE id=?", (diag_id,))
@@ -627,7 +672,23 @@ def health(c=Depends(con), check_adapters: bool = False):
     ad = ([adapters.get_adapter(n).health()
            for n in ("cdse", "earthsearch")
            if config.get(f"adapters.{n}.enabled")] if check_adapters else None)
-    return {"ok": True, "queue": queue, "adapters": ad,
+    stalled = c.execute(
+        "SELECT COUNT(*) n FROM job WHERE status='queued'"
+        # available_at, not created_at: a job deliberately deferred into the future
+        # is waiting correctly, not stalled. Timestamps are stored as UTC ISO-8601
+        # ("...T12:29:35+00:00"), so the comparison string has to match that shape —
+        # SQLite's own datetime() uses a space separator and would never compare equal.
+        " AND available_at < strftime('%Y-%m-%dT%H:%M:%S', 'now', '-5 minutes')"
+    ).fetchone()["n"]
+    return {"ok": True, "queue": queue,
+            # Jobs pile up silently when no worker is running; say so rather than
+            # letting the UI show "Queued…" forever.
+            "worker": {"stalled_jobs": stalled,
+                       "ok": stalled == 0,
+                       "hint": "No worker has picked up queued jobs for over 5 minutes."
+                               " Start one with: python -m terrawatch.worker"
+                               if stalled else None},
+            "adapters": ad,
             "credentials": config.credential_status(),
             "gee": {"configured": gee.configured(), **gee.quota(c)},
             "storage": {**artifacts.usage(),
@@ -679,21 +740,22 @@ def export_alert(uuid: str, c=Depends(con)):
 
 @app.get(f"{V1}/artifacts/{{artifact_id}}/raw")
 def artifact_raw(artifact_id: int, c=Depends(con)):
-    r = c.execute("SELECT path, media_type FROM artifact WHERE id=?",
+    r = c.execute("SELECT media_type FROM artifact WHERE id=?",
                   (artifact_id,)).fetchone()
-    if not r or not os.path.exists(r["path"]):
+    p = artifacts.local_path(c, artifact_id)
+    if not r or not p or not os.path.exists(p):
         raise HTTPException(404, "artifact not found")
-    return FileResponse(r["path"], media_type=r["media_type"])
+    return FileResponse(p, media_type=r["media_type"])
 
 
 @app.get(f"{V1}/artifacts/{{artifact_id}}/overlay")
 def artifact_overlay(artifact_id: int, c=Depends(con)):
     import rasterio
     from rasterio.warp import transform_bounds
-    r = c.execute("SELECT path FROM artifact WHERE id=?", (artifact_id,)).fetchone()
-    if not r or not os.path.exists(r["path"]):
+    p = artifacts.local_path(c, artifact_id)
+    if not p or not os.path.exists(p):
         raise HTTPException(404, "artifact not found")
-    with rasterio.open(r["path"]) as src:
+    with rasterio.open(p) as src:
         w, s, e, n = transform_bounds(src.crs, "EPSG:4326", *src.bounds)
     return {"url": f"{V1}/artifacts/{artifact_id}/overlay.png",
             "coordinates": [[w, n], [e, n], [e, s], [w, s]]}
@@ -705,10 +767,10 @@ def artifact_overlay_png(artifact_id: int, c=Depends(con)):
     import numpy as np
     import rasterio
     from PIL import Image
-    r = c.execute("SELECT path FROM artifact WHERE id=?", (artifact_id,)).fetchone()
-    if not r or not os.path.exists(r["path"]):
+    p = artifacts.local_path(c, artifact_id)
+    if not p or not os.path.exists(p):
         raise HTTPException(404, "artifact not found")
-    with rasterio.open(r["path"]) as src:
+    with rasterio.open(p) as src:
         valid = src.read(1, out_shape=(min(src.height, 1024), min(src.width, 1024)),
                          resampling=rasterio.enums.Resampling.nearest) >= 0.5
     rgba = np.zeros((*valid.shape, 4), "uint8")

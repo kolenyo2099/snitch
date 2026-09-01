@@ -33,10 +33,10 @@ def save(con, baseline: dict, crs: str, transform, observation_ids: list[int],
 
 def load(con, artifact_id: int) -> dict:
     import rasterio
-    row = con.execute("SELECT path, meta_json FROM artifact WHERE id=?",
+    row = con.execute("SELECT meta_json FROM artifact WHERE id=?",
                       (artifact_id,)).fetchone()
     meta = json.loads(row["meta_json"])
-    with rasterio.open(row["path"]) as src:
+    with rasterio.open(artifacts.local_path(con, artifact_id)) as src:
         stack = src.read().astype("float32")
     out = {"harmonics": meta["harmonics"], "n_obs": meta["n_obs"],
            "day0": meta["day0"], "coef": {}, "sigma": {}, "meta": meta}

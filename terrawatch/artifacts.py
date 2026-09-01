@@ -62,16 +62,28 @@ def put_cog(con, array: np.ndarray, crs: str, transform, meta: dict | None = Non
     return put_bytes(con, blob, "image/tiff; application=geotiff", meta)
 
 
+def local_path(con, artifact_id: int) -> str | None:
+    """Where this artifact lives *on this machine*.
+
+    The store is content-addressed, so the path is a pure function of the digest and
+    the current data directory. The `path` column records where it was first written
+    — inside a container that is an absolute `/data/...` which does not resolve on
+    the host, and vice versa. Deriving it instead keeps one database usable from
+    both, and is what every reader must use.
+    """
+    row = con.execute("SELECT sha256 FROM artifact WHERE id=?", (artifact_id,)).fetchone()
+    return path_for(row["sha256"]) if row else None
+
+
 def read(con, artifact_id: int) -> bytes:
-    row = con.execute("SELECT path FROM artifact WHERE id=?", (artifact_id,)).fetchone()
-    return open(row["path"], "rb").read()
+    return open(local_path(con, artifact_id), "rb").read()
 
 
 def link_project(con, artifact_id: int, project_id: int, directory: str,
                  filename: str) -> str:
     """Expose an immutable artifact in the human-browsable per-project layout."""
-    row = con.execute("SELECT path FROM artifact WHERE id=?", (artifact_id,)).fetchone()
-    if not row:
+    src = local_path(con, artifact_id)
+    if not src:
         raise KeyError(f"artifact {artifact_id}")
     target_dir = os.path.join(data_dir(), "projects", str(project_id), directory)
     os.makedirs(target_dir, exist_ok=True)
@@ -79,9 +91,9 @@ def link_project(con, artifact_id: int, project_id: int, directory: str,
     target = os.path.join(target_dir, safe)
     if not os.path.exists(target):
         try:
-            os.link(row["path"], target)
+            os.link(src, target)
         except OSError:
-            shutil.copyfile(row["path"], target)
+            shutil.copyfile(src, target)
     return target
 
 
@@ -111,8 +123,8 @@ def gc(con, dry_run: bool = True) -> dict:
                 refs |= {int(v) for v in aux.get(key, {}).values() if v}
         except (TypeError, ValueError, json.JSONDecodeError):
             pass
-    orphans = [(r["id"], r["path"], r["bytes"]) for r in
-               con.execute("SELECT id, path, bytes FROM artifact")
+    orphans = [(r["id"], path_for(r["sha256"]), r["bytes"]) for r in
+               con.execute("SELECT id, sha256, bytes FROM artifact")
                if r["id"] not in refs]
     if not dry_run:
         for aid, p, _ in orphans:

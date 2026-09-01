@@ -50,9 +50,19 @@ export function Timeline({ observations, runs, threshold, units, polarity, onSel
     return out.sort((a, b) => a.date.localeCompare(b.date));
   }, [observations, runs]);
 
-  if (!ticks.length) return <p className="muted">No observations yet.</p>;
+  if (!ticks.length)
+    return (
+      <div className="muted">
+        <b>No observations yet.</b>
+        <p className="tiny" style={{ marginBottom: 0 }}>
+          Nothing has been acquired for this area. If the monitor is active, the next
+          scheduled poll will look for imagery; if it is calibrating, history is still
+          being fetched.
+        </p>
+      </div>
+    );
 
-  const W = Math.max(760, ticks.length * 13), H = 210, PAD = 34, TRACK = 172;
+  const W = Math.max(760, ticks.length * 13), H = 216, PAD = 34, TRACK = 172;
   const scores = ticks.map(t => t.score).filter((s): s is number => s != null);
   const maxY = Math.max(threshold * 1.4, ...scores, 1);
   const x = (i: number) => PAD + (i * (W - PAD - 14)) / Math.max(ticks.length - 1, 1);
@@ -67,7 +77,7 @@ export function Timeline({ observations, runs, threshold, units, polarity, onSel
           <g key={f}>
             <line x1={PAD} x2={W - 10} y1={y(maxY * f)} y2={y(maxY * f)} stroke="var(--line)" />
             <text x={4} y={y(maxY * f) + 4} fill="var(--faint)" fontSize="10">
-              {(maxY * f).toFixed(1)}
+              {(maxY * f).toFixed(1)}{f === 1 && units ? ` ${units}` : ""}
             </text>
           </g>
         ))}
@@ -77,7 +87,13 @@ export function Timeline({ observations, runs, threshold, units, polarity, onSel
               textAnchor="end">threshold {threshold} {units}</text>
         {line && <polyline points={line} fill="none" stroke="var(--accent)" strokeWidth="1.5" />}
         {ticks.map((t, i) => (
-          <g key={t.date + i} className="tick" onClick={() => onSelect?.(t)}>
+          <g key={t.date + i} className="tick" onClick={() => onSelect?.(t)}
+             role={t.run ? "button" : undefined} tabIndex={t.run ? 0 : undefined}
+             onKeyDown={(e) => {
+               if (t.run && (e.key === "Enter" || e.key === " ")) {
+                 e.preventDefault(); onSelect?.(t);
+               }
+             }}>
             <title>
               {t.date} — {t.state === "scored"
                 ? `scored, ${t.score?.toFixed(2)} ${units}, ${(t.obs!.valid_fraction * 100).toFixed(0)}% usable`
@@ -94,7 +110,19 @@ export function Timeline({ observations, runs, threshold, units, polarity, onSel
                   opacity={t.state === "none" ? 0.55 : 1} />
           </g>
         ))}
-        <text x={PAD} y={H - 4} fill="var(--faint)" fontSize="10">{ticks[0].date}</text>
+        {/* One date at each end told you nothing about the middle. */}
+        {ticks.map((t, i) => {
+          const every = Math.max(1, Math.ceil(ticks.length / 8));
+          if (i % every || i > ticks.length - every / 2) return null;
+          return (
+            <g key={`lab${i}`}>
+              <line x1={x(i)} x2={x(i)} y1={TRACK + 26} y2={TRACK + 30} stroke="var(--line)" />
+              <text x={x(i)} y={H - 4} fill="var(--faint)" fontSize="10" textAnchor="middle">
+                {t.date.slice(0, 7)}
+              </text>
+            </g>
+          );
+        })}
         <text x={W - 10} y={H - 4} fill="var(--faint)" fontSize="10" textAnchor="end">
           {ticks[ticks.length - 1].date}
         </text>

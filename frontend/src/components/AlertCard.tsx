@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 import { Alert, Diagnostic, UserStatus } from "../types";
 import { CaveatChips, SeverityChip } from "./Chips";
-import { artifactUrl } from "../api";
+import { ChipImage } from "./Chip";
 
 const ha = (m2: number) => (m2 / 10000).toFixed(1);
 
@@ -9,9 +9,7 @@ export function AlertCard({ a, onTriage }:
   { a: Alert; onTriage?: (s: UserStatus) => void }) {
   return (
     <div className={`alert-card ${a.confidence === "provisional" ? "provisional" : ""}`}>
-      {a.overlay_chip_id
-        ? <img className="thumb" src={artifactUrl(a.overlay_chip_id)} alt="change overlay" />
-        : <div className="thumb" />}
+      <ChipImage id={a.overlay_chip_id} alt="Change overlay" className="thumb" />
       <div className="body">
         <div className="spread">
           <div className="row">
@@ -53,6 +51,10 @@ export function DiagnosticCard({ d, onAck }: { d: Diagnostic; onAck?: () => void
       <div className="body">
         <div className="spread">
           <div className="row">
+            {/* Which monitor this came from. Without it a mixed feed is unreadable. */}
+            {d.project_uuid && (
+              <Link to={`/projects/${d.project_uuid}`}><b>{d.project_name}</b></Link>
+            )}
             <span className="chip mono">{d.code}</span>
             <span className={`chip sev-${d.severity}`}>{d.severity}</span>
             <span className="muted tiny">{d.occurred_at.replace("T", " ").slice(0, 16)}</span>

@@ -60,8 +60,13 @@ export const api = {
   triage: (u: string, body: any) =>
     req<any>(`/alerts/${u}`, { method: "PATCH", body: JSON.stringify(body) }),
   incidents: (u: string) => req<{ items: any[] }>(`/projects/${u}/incidents`),
-  feed: (q = "") => req<{ items: any[] }>(`/feed${q}`),
-  diagnostics: (q = "") => req<{ items: any[] }>(`/diagnostics${q}`),
+  feed: (q = "") => req<{ items: any[]; next_cursor?: string | null }>(`/feed${q}`),
+  diagnostics: (q = "") => req<{ items: any[]; total?: number }>(`/diagnostics${q}`),
+  diagnosticsSummary: (project?: string) =>
+    req<{ items: any[] }>(`/diagnostics/summary${project ? `?project=${project}` : ""}`),
+  ackDiagnosticCode: (code: string, project?: string) =>
+    req<{ acknowledged: number }>("/diagnostics/acknowledge",
+                                  { method: "POST", body: JSON.stringify({ code, project }) }),
   ackDiagnostic: (id: number) =>
     req<any>(`/diagnostics/${id}/acknowledge`, { method: "POST" }),
   recipes: () => req<any[]>("/recipes"),

@@ -37,6 +37,9 @@ export function MapView({ aoi, change, maskArtifactId, maskLayers, height = 520 
   const deckRef = useRef<MapboxOverlay>();
   const [showChange, setShowChange] = useState(true);
   const [showMask, setShowMask] = useState(false);
+  // Tiles take a few seconds. Until they arrive the map is an unexplained black
+  // rectangle that reads as a broken basemap rather than as a pending one.
+  const [tilesReady, setTilesReady] = useState(false);
   const [selectedMask, setSelectedMask] = useState("all masked pixels");
   const selectedArtifact = selectedMask === "all masked pixels"
     ? maskArtifactId : maskLayers?.[selectedMask];
@@ -45,6 +48,8 @@ export function MapView({ aoi, change, maskArtifactId, maskLayers, height = 520 
     if (!ref.current || mapRef.current) return;
     const map = new maplibregl.Map({ container: ref.current, style: STYLE, center: [0, 0], zoom: 2 });
     map.addControl(new maplibregl.NavigationControl(), "top-left");
+    map.addControl(new maplibregl.ScaleControl({ maxWidth: 110, unit: "metric" }), "bottom-left");
+    map.once("idle", () => setTilesReady(true));
     const deck = new MapboxOverlay({ layers: [] });
     map.addControl(deck as any);
     mapRef.current = map;
@@ -95,7 +100,17 @@ export function MapView({ aoi, change, maskArtifactId, maskLayers, height = 520 
 
   return (
     <div style={{ position: "relative" }}>
-      <div className="map" style={{ height }} ref={ref} />
+      <div className="map" style={{ height }} ref={ref}>
+        {!tilesReady && <div className="map-loading">Loading map tiles…</div>}
+      </div>
+      <button style={{ position: "absolute", left: 10, bottom: 34, zIndex: 5 }}
+              onClick={() => {
+                if (!aoi || !mapRef.current) return;
+                const [w, s2, e, n] = bounds(aoi);
+                mapRef.current.fitBounds([[w, s2], [e, n]], { padding: 48 });
+              }}>
+        Zoom to area
+      </button>
       <div className="map-controls">
         <label style={{ display: "block" }}>
           <input type="checkbox" checked={showChange} disabled={!change}
@@ -119,12 +134,21 @@ export function MapView({ aoi, change, maskArtifactId, maskLayers, height = 520 
 }
 
 /** Draw an AOI. terra-draw is loaded lazily so the map still works if it fails. */
-export function DrawMap({ onChange, height = 460 }:
-  { onChange: (geojson: any | null) => void; height?: number }) {
+export function DrawMap({ onChange, onPlace, height = 460 }:
+  { onChange: (geojson: any | null) => void;
+    onPlace?: (name: string) => void; height?: number }) {
   const ref = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map>();
   const timer = useRef<any>();
   const lastKey = useRef<string | null>(null);
+  const [tilesReady, setTilesReady] = useState(false);
+  // Which tool is armed, and how to use it. Rectangle is click-corner-then-click-
+  // opposite-corner; dragging just pans, so without this the first attempt fails
+  // silently and the tool looks broken.
+  const [mode, setModeState] = useState<"polygon" | "rectangle" | null>(null);
+  const [place, setPlace] = useState("");
+  const [results, setResults] = useState<any[] | null>(null);
+  const [searching, setSearching] = useState(false);
   // the map effect runs once; keep the latest callback reachable from inside it
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
@@ -133,6 +157,8 @@ export function DrawMap({ onChange, height = 460 }:
     if (!ref.current || mapRef.current) return;
     const map = new maplibregl.Map({ container: ref.current, style: STYLE, center: [4.9, 52.4], zoom: 8 });
     map.addControl(new maplibregl.NavigationControl(), "top-left");
+    map.addControl(new maplibregl.ScaleControl({ maxWidth: 110, unit: "metric" }), "bottom-left");
+    map.once("idle", () => setTilesReady(true));
     mapRef.current = map;
     let draw: any;
     map.on("load", async () => {
@@ -145,6 +171,7 @@ export function DrawMap({ onChange, height = 460 }:
         });
         draw.start();
         draw.setMode("polygon");
+        setModeState("polygon");
         (map as any).__draw = draw;
         // "change" fires on every vertex drag. Each one used to launch a full
         // coverage check, so a single edit produced a burst of overlapping requests.
@@ -173,23 +200,87 @@ export function DrawMap({ onChange, height = 460 }:
     };
   }, []);
 
-  const setMode = (m: string) => (mapRef.current as any)?.__draw?.setMode(m);
+  const setMode = (m: "polygon" | "rectangle") => {
+    (mapRef.current as any)?.__draw?.setMode(m);
+    setModeState(m);
+  };
+
+  /* Panning the whole globe by hand to find your own site is not a search. Nominatim
+   * needs no key and is the same project already serving the basemap tiles. */
+  const search = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!place.trim()) return;
+    setSearching(true); setResults(null);
+    try {
+      const r = await fetch(
+        "https://nominatim.openstreetmap.org/search?format=json&limit=5&q="
+        + encodeURIComponent(place), { headers: { "accept-language": "en" } });
+      setResults(r.ok ? await r.json() : []);
+    } catch { setResults([]); }
+    finally { setSearching(false); }
+  };
+
+  const goTo = (r: any) => {
+    const [s, n, w, e] = (r.boundingbox || []).map(Number);
+    if ([s, n, w, e].every(Number.isFinite))
+      mapRef.current?.fitBounds([[w, s], [e, n]], { padding: 40 });
+    else
+      mapRef.current?.flyTo({ center: [+r.lon, +r.lat], zoom: 12 });
+    const short = r.display_name.split(",")[0];
+    setResults(null); setPlace(short); onPlace?.(short);
+  };
 
   return (
     <div style={{ position: "relative" }}>
-      <div className="map" style={{ height }} ref={ref} />
+      <div className="map" style={{ height }} ref={ref}>
+        {!tilesReady && <div className="map-loading">Loading map tiles…</div>}
+      </div>
+
+      <form className="geo-search" onSubmit={search}>
+        <input value={place} onChange={(e) => setPlace(e.target.value)}
+               placeholder="Find a place…" aria-label="Search for a place" />
+        <button type="submit" disabled={!place.trim() || searching}>
+          {searching ? "Searching…" : "Go"}
+        </button>
+      </form>
+      {results && (
+        <div className="geo-results" role="listbox" aria-label="Place results">
+          {results.length
+            ? results.map((r) => (
+                <button key={r.place_id} type="button" onClick={() => goTo(r)}>
+                  {r.display_name}
+                </button>))
+            : <p className="tiny muted" style={{ padding: 8, margin: 0 }}>
+                No place matched that. You can still pan the map or paste a geometry below.
+              </p>}
+        </div>
+      )}
+
       <div className="map-controls row">
-        <button onClick={() => setMode("polygon")}>Polygon</button>
-        <button onClick={() => setMode("rectangle")}>Rectangle</button>
+        <button aria-pressed={mode === "polygon"}
+                className={mode === "polygon" ? "primary" : ""}
+                onClick={() => setMode("polygon")}>Polygon</button>
+        <button aria-pressed={mode === "rectangle"}
+                className={mode === "rectangle" ? "primary" : ""}
+                onClick={() => setMode("rectangle")}>Rectangle</button>
         <button onClick={() => {
           clearTimeout(timer.current);
           lastKey.current = null;
           (mapRef.current as any)?.__draw?.clear();
+          setResults(null);
           onChange(null);
         }}>
           Clear
         </button>
       </div>
+
+      {tilesReady && mode && (
+        <p className="map-hint">
+          {mode === "rectangle"
+            ? "Click one corner, then click the opposite corner. Dragging pans the map."
+            : "Click each corner of the area, then click the first point again to close it."}
+        </p>
+      )}
     </div>
   );
 }
@@ -201,9 +292,10 @@ export function SwipeCompare({ before, after }: { before?: string; after?: strin
   return (
     <div>
       <div className="swipe-wrap">
-        <img src={before} alt="before" />
+        <img src={before} alt="Before" loading="lazy" />
         <div className="after" style={{ width: `${pos}%` }}>
-          <img src={after} alt="after" style={{ width: `${100 / (pos / 100)}%`, maxWidth: "none" }} />
+          <img src={after} alt="After" loading="lazy"
+               style={{ width: `${100 / (pos / 100)}%`, maxWidth: "none" }} />
         </div>
         <div className="swipe-handle" style={{ left: `${pos}%` }} />
       </div>

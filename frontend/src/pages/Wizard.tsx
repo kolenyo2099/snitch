@@ -1,10 +1,12 @@
 import { useEffect, useState, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { DrawMap } from "../components/MapView";
 import { Calibrate } from "../components/Calibrate";
 import { ProjectProgress } from "../components/Progress";
 import { STATUS_HELP } from "../components/Chips";
+import { ErrorBox } from "../components/Async";
+import { describeCron } from "../format";
 import { DetectorSpec, Recipe, Run } from "../types";
 
 const STEPS = ["Where", "What", "Calibrate", "Watch"];
@@ -55,6 +57,12 @@ export default function Wizard() {
 
   const [name, setName] = useState("");
   const [cron, setCron] = useState("");
+  // Where the user searched, so an unnamed monitor still gets a name someone can
+  // recognise in a list. Four projects called "Untitled monitor" is not a list.
+  const [placeName, setPlaceName] = useState("");
+  const fallbackName = () =>
+    [placeName, recipe?.display_name].filter(Boolean).join(" — ")
+    || (preview ? `${preview.area_km2.toFixed(0)} km2 monitor` : "Untitled monitor");
 
   useEffect(() => { api.recipes().then(setRecipes); api.detectors().then(setDetectors); }, []);
   const recipe = recipes.find((r) => r.id === recipeId);
@@ -95,7 +103,7 @@ export default function Wizard() {
     setBusy(true); setErr(undefined);
     try {
       const p = await api.createProject({
-        name: name || "Untitled monitor", aoi_geojson: aoi, recipe_ids: recipeIds,
+        name: name.trim() || fallbackName(), aoi_geojson: aoi, recipe_ids: recipeIds,
         s1_relative_orbit: orbit?.relative_orbit ?? null,
         s1_pass_direction: orbit?.pass_direction ?? null,
         // a mixed-sensor project needs a source list that can serve both
@@ -140,7 +148,8 @@ export default function Wizard() {
         threshold, source: usedDefault ? "default" : "calibrated",
         ...(backtestArtifact ? { backtest_artifact_id: backtestArtifact } : {}),
       }, methId);
-      await api.patchProject(uuid, { name: name || "Untitled monitor", schedule_cron: cron });
+      await api.patchProject(uuid, { name: name.trim() || fallbackName(),
+                                    schedule_cron: cron });
       await api.activate(uuid);
       nav(`/projects/${uuid}`);
     } catch (e: any) { setErr(e.message); }
@@ -149,49 +158,36 @@ export default function Wizard() {
 
   return (
     <>
-      <h2>New monitor</h2>
-      <p className="sub">Four steps. You can change everything later except the recipe.</p>
-      <div className="wizard-steps">
+      <h1 className="page">New monitor</h1>
+      <p className="sub">
+        Four steps. You can change everything later except the recipe.
+        {" "}The monitor is created at step 3, when calibration starts.
+      </p>
+      <ol className="wizard-steps" aria-label="Progress">
         {STEPS.map((s, i) => (
-          <div key={s} className={i === step ? "on" : ""}>{i + 1}. {s}</div>
+          <li key={s} className={i === step ? "on" : i < step ? "done" : ""}
+              aria-current={i === step ? "step" : undefined}>
+            {i < step ? "\u2713" : i + 1}. {s}
+          </li>
         ))}
-      </div>
-      {err && <div className="err-box" style={{ marginBottom: 12 }}>{err}</div>}
+      </ol>
+      {err && <ErrorBox error={err} what="This step" />}
 
       {step === 0 && (
         <div className="grid">
-          <DrawMap onChange={runPreview} />
           <div className="panel">
-            <b>Or paste a GeoJSON geometry / Feature</b>
-            <textarea rows={3} style={{ width: "100%", marginTop: 6 }} value={paste}
-                      onChange={(e) => setPaste(e.target.value)}
-                      placeholder='{"type":"Polygon","coordinates":[[[...]]]}' />
-            <button onClick={() => {
-              try {
-                const g = JSON.parse(paste);
-                runPreview(g.type === "Feature" ? g.geometry
-                  : g.type === "FeatureCollection" ? g.features[0].geometry : g);
-              } catch { setErr("That is not valid GeoJSON."); }
-            }}>Use this geometry</button>
-            <div className="geometry-divider"><span>or import</span></div>
-            <label className="file-action">
-              Choose a KML file
-              <input type="file" accept=".kml,application/vnd.google-earth.kml+xml"
-                     onChange={async (e) => {
-                       const file = e.target.files?.[0];
-                       if (!file) return;
-                       try {
-                         setErr(undefined);
-                         await runPreview(geometryFromKml(await file.text()));
-                       } catch (error: any) { setErr(error.message); }
-                       finally { e.target.value = ""; }
-                     }} />
+            <label>Name this monitor
+              <input value={name} style={{ width: "100%" }} autoFocus
+                     onChange={(e) => setName(e.target.value)}
+                     placeholder="Northern block" />
             </label>
             <p className="tiny muted">
-              Imports polygon boundaries; placemarks without an area are ignored.
+              Just for you — how it will be listed. Rename any time.
+              {!name.trim() && (placeName || preview) &&
+                <> Left blank, it will be called <b>{fallbackName()}</b>.</>}
             </p>
           </div>
-
+          <DrawMap onChange={runPreview} onPlace={setPlaceName} />
           {busy && (
             <div className="panel coverage-progress" role="status" aria-live="polite">
               <b>Checking what imagery exists here…</b>
@@ -206,7 +202,7 @@ export default function Wizard() {
             </div>
           )}
           {preview && (
-            <div className="panel">
+            <div className="panel aoi-summary">
               <b>{preview.area_km2.toFixed(1)} km² · analysis CRS {preview.analysis_crs}</b>
               <span className="chip settled" title="This shape has been fully checked.">
                 ✓ coverage checked
@@ -239,12 +235,52 @@ export default function Wizard() {
               )}
             </div>
           )}
+          <div className="panel">
+            <b>Or paste a GeoJSON geometry / Feature</b>
+            <textarea rows={3} style={{ width: "100%", marginTop: 6 }} value={paste}
+                      onChange={(e) => setPaste(e.target.value)}
+                      placeholder='{"type":"Polygon","coordinates":[[[...]]]}' />
+            <button onClick={() => {
+              try {
+                const g = JSON.parse(paste);
+                runPreview(g.type === "Feature" ? g.geometry
+                  : g.type === "FeatureCollection" ? g.features[0].geometry : g);
+              } catch { setErr("That is not valid GeoJSON."); }
+            }}>Use this geometry</button>
+            <div className="geometry-divider"><span>or import</span></div>
+            <label className="file-action">
+              Choose a KML file
+              <input type="file" accept=".kml,application/vnd.google-earth.kml+xml"
+                     onChange={async (e) => {
+                       const file = e.target.files?.[0];
+                       if (!file) return;
+                       try {
+                         setErr(undefined);
+                         await runPreview(geometryFromKml(await file.text()));
+                       } catch (error: any) { setErr(error.message); }
+                       finally { e.target.value = ""; }
+                     }} />
+            </label>
+            <p className="tiny muted">
+              Imports polygon boundaries; placemarks without an area are ignored.
+            </p>
+          </div>
+
           <div className="row">
             <button className="primary" disabled={!aoi || busy || !preview}
-                    title={busy ? "Waiting for the coverage check to finish" : undefined}
+                    title={!aoi ? "Draw or paste an area first"
+                      : busy ? "Waiting for the coverage check to finish" : undefined}
                     onClick={() => setStep(1)}>
               {busy ? "Checking coverage…" : "Next: what to watch for"}
             </button>
+            {/* A disabled button with no reason next to it is a dead end. */}
+            {(!aoi || busy || !preview) && (
+              <span className="tiny muted">
+                {!aoi
+                  ? "Draw an area on the map, or paste a geometry, to continue."
+                  : "Waiting for the coverage check to finish…"}
+              </span>
+            )}
           </div>
         </div>
       )}
@@ -315,17 +351,6 @@ export default function Wizard() {
             </div>
           )}
 
-          <div className="panel">
-            <label>Name this monitor
-              <input value={name} style={{ width: "100%" }}
-                     onChange={(e) => setName(e.target.value)}
-                     placeholder="Northern block" />
-            </label>
-            <p className="tiny muted">
-              Just for you — how it will be listed. You can rename it any time.
-            </p>
-          </div>
-
           {recipe && (
             <div className="panel">
               <b>What this method cannot do</b>
@@ -337,15 +362,40 @@ export default function Wizard() {
             <button onClick={() => setStep(0)}>Back</button>
             <button className="primary" disabled={!recipeIds.length || busy ||
                        (needsRadarOrbit && !orbit)}
+                    title={!recipeIds.length ? "Pick at least one question"
+                      : needsRadarOrbit && !orbit ? "Pick a radar orbit" : undefined}
                     onClick={beginCalibration}>
-              Next: calibrate on this site's history
+              {busy ? "Creating the monitor…" : "Next: calibrate on this site's history"}
             </button>
+            {!busy && (!recipeIds.length || (needsRadarOrbit && !orbit)) && (
+              <span className="tiny muted">
+                {!recipeIds.length
+                  ? "Pick at least one question above to continue."
+                  : "Pick one radar orbit above to continue — the radar method needs it."}
+              </span>
+            )}
           </div>
+          <p className="tiny muted">
+            The next step creates the monitor and starts a {BACKTEST_YEARS}-year
+            calibration over this area. It runs in the background and sends no alerts.
+          </p>
         </div>
       )}
 
       {step === 2 && (
         <div className="grid">
+          <div className="panel">
+            <b>Set the alert threshold</b>
+            <p className="tiny muted" style={{ margin: "4px 0 0" }}>
+              We scored the last {BACKTEST_YEARS} years of this exact site with the method
+              you picked. The histogram is every past observation by how much it changed.
+              Drag the line: anything to the {spec?.score_polarity === "lower_is_more_change"
+                ? "left" : "right"} of it would have raised an alert. The count and the real
+              past dates below update as you drag, so you can pick a line that would have
+              caught the changes you care about without firing every week. Unsure? Use the
+              default below.
+            </p>
+          </div>
           {backtesting && (
             <>
               <div className="panel">
@@ -386,11 +436,50 @@ export default function Wizard() {
       )}
 
       {step === 3 && (
-        <div className="grid" style={{ maxWidth: 620 }}>
+        <div className="grid" style={{ maxWidth: 680 }}>
+          {/* Last screen of a four-step flow. It used to show only a name and a
+              schedule, with no restatement of what was actually configured. */}
+          <div className="panel">
+            <h3 className="card">Review</h3>
+            <table>
+              <tbody>
+                <tr><th scope="row">Area</th>
+                    <td>{preview ? `${preview.area_km2.toFixed(1)} km²` : "—"}
+                      {preview?.analysis_crs &&
+                        <span className="muted"> · {preview.analysis_crs}</span>}</td></tr>
+                <tr><th scope="row">Watching for</th>
+                    <td>{chosen.length
+                      ? <ul style={{ margin: 0, paddingLeft: 18 }}>
+                          {chosen.map((r, i) => (
+                            <li key={r.id}>{r.plain_question}
+                              {i === 0 && chosen.length > 1 &&
+                                <span className="muted"> (primary)</span>}</li>
+                          ))}
+                        </ul>
+                      : "—"}</td></tr>
+                {orbit && (
+                  <tr><th scope="row">Radar orbit</th>
+                      <td className="mono">#{orbit.relative_orbit} {orbit.pass_direction}</td></tr>
+                )}
+                <tr><th scope="row">Alert threshold</th>
+                    <td className="mono">{threshold} {spec?.score_units}
+                      <div className="tiny muted">
+                        {usedDefault || !runs.length
+                          ? "The recipe default — recorded as such. Retune it on the "
+                            + "Methods tab once calibration finishes."
+                          : `Chosen from this site's ${BACKTEST_YEARS}-year history.`}
+                      </div></td></tr>
+                <tr><th scope="row">Observations scored</th>
+                    <td>{runs.length}
+                      {backtesting && <span className="muted"> · still calibrating</span>}</td></tr>
+              </tbody>
+            </table>
+          </div>
           <div className="panel grid">
             <label>Name
               <input value={name} style={{ width: "100%" }}
-                     onChange={(e) => setName(e.target.value)} placeholder="Northern block" />
+                     onChange={(e) => setName(e.target.value)}
+                     placeholder={fallbackName()} />
             </label>
             <label>Check for new imagery
               <select value={cron} style={{ width: "100%" }}
@@ -402,18 +491,27 @@ export default function Wizard() {
                 <option value="0 3 */2 * *">Every 2 days</option>
                 <option value="0 3 * * 1">Weekly, Mondays</option>
               </select>
-              <span className="tiny muted mono">{cron}</span>
+              <span className="tiny muted">
+                {describeCron(cron) || "—"}
+                <span className="mono"> ({cron})</span>
+              </span>
             </label>
             <p className="tiny muted">
-              Notification channels are configured once, in Settings, and apply to every
-              monitor.
+              Notification channels are configured once, in{" "}
+              <Link to="/settings">Settings</Link>, and apply to every monitor.
             </p>
           </div>
           <div className="row">
             <button onClick={() => setStep(2)}>Back</button>
             <button className="primary" disabled={busy} onClick={activate}>
-              Activate monitor
+              {busy ? "Activating…" : "Activate monitor"}
             </button>
+            {backtesting && (
+              <span className="tiny muted">
+                Calibration is still running. Activating now is fine — it finishes in the
+                background and you can retune the threshold afterwards.
+              </span>
+            )}
           </div>
         </div>
       )}

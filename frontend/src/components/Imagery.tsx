@@ -1,5 +1,7 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { artifactUrl } from "../api";
+import { ChipImage } from "./Chip";
 import { Alert, Observation, Run } from "../types";
 
 /** One rendered frame set for a single acquisition. */
@@ -57,23 +59,34 @@ export function collectImagery(alerts: Alert[], runs: Run[], obs: Observation[])
     .sort((a, b) => b.sensed_at.localeCompare(a.sensed_at));
 }
 
+/* Every frame renders, present or not. Omitting the missing ones left rows that were
+   silently blank, and a bare <img> onto a 404 shows the browser's broken-image glyph,
+   which reads as a corrupted picture rather than an absent file. */
 function Frame({ id, label }: { id?: number | null; label: string }) {
-  if (!id) return null;
   return (
     <figure className="imagery-frame">
-      <a href={artifactUrl(id)} target="_blank" rel="noreferrer">
-        <img src={artifactUrl(id)} alt={label} loading="lazy" />
-      </a>
+      {id
+        ? <a href={artifactUrl(id)} target="_blank" rel="noreferrer">
+            <ChipImage id={id} alt={label} />
+          </a>
+        : <ChipImage id={id} alt={label} />}
       <figcaption className="tiny muted">{label}</figcaption>
     </figure>
   );
 }
 
+const PAGE = 12;
+
 export function ImageryGallery(
   { alerts, runs, obs, acquired, processed }:
   { alerts: Alert[]; runs: Run[]; obs: Observation[]; acquired: number; processed: number },
 ) {
-  const sets = collectImagery(alerts, runs, obs);
+  const all = collectImagery(alerts, runs, obs);
+  const [origin, setOrigin] = useState<"all" | "alert" | "calibration">("all");
+  const [shown, setShown] = useState(PAGE);
+  const sets = origin === "all" ? all : all.filter((s) => s.origin === origin);
+  const page = sets.slice(0, shown);
+  const nAlert = all.filter((s) => s.origin === "alert").length;
 
   if (!sets.length) {
     return (
@@ -91,12 +104,25 @@ export function ImageryGallery(
 
   return (
     <div className="grid" style={{ gap: 14 }}>
-      <p className="tiny muted" style={{ margin: 0 }}>
-        {sets.length} rendered frame set{sets.length === 1 ? "" : "s"} from {acquired}{" "}
-        acquired scene{acquired === 1 ? "" : "s"}. Before and after use an identical
-        stretch, so the comparison cannot manufacture change.
-      </p>
-      {sets.map((s) => (
+      <div className="spread">
+        <p className="tiny muted" style={{ margin: 0, maxWidth: "60ch" }}>
+          {sets.length} rendered frame set{sets.length === 1 ? "" : "s"} from {acquired}{" "}
+          acquired scene{acquired === 1 ? "" : "s"}. Before and after use an identical
+          stretch, so the comparison cannot manufacture change.
+        </p>
+        <div className="row" role="group" aria-label="Filter frames">
+          {(["all", "alert", "calibration"] as const).map((k) => (
+            <button key={k} aria-pressed={origin === k}
+                    className={origin === k ? "primary" : ""}
+                    onClick={() => { setOrigin(k); setShown(PAGE); }}>
+              {k === "all" ? `All (${all.length})`
+                : k === "alert" ? `Alerts (${nAlert})`
+                : `Calibration (${all.length - nAlert})`}
+            </button>
+          ))}
+        </div>
+      </div>
+      {page.map((s) => (
         <div className="panel" key={s.key}>
           <div className="spread">
             <div className="row" style={{ gap: 8 }}>
@@ -114,6 +140,13 @@ export function ImageryGallery(
           {s.note && <p className="tiny muted" style={{ marginTop: 8 }}>{s.note}</p>}
         </div>
       ))}
+      {/* 99 frame sets used to render as 297 simultaneous image requests. */}
+      {shown < sets.length && (
+        <button onClick={() => setShown(shown + PAGE)}>
+          Show {Math.min(PAGE, sets.length - shown)} more
+          <span className="muted"> ({shown} of {sets.length} shown)</span>
+        </button>
+      )}
     </div>
   );
 }

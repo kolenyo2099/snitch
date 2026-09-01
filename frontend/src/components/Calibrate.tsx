@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import { Run } from "../types";
-import { artifactUrl } from "../api";
+import { ChipImage } from "./Chip";
 
 /**
  * The core interaction (§13.2 step 3): a histogram of every historical score at this
@@ -44,6 +44,11 @@ export function Calibrate({ runs, threshold, units, semantics, years, polarity,
   const perWeeks = would.length ? (years * 52) / would.length : 0;
 
   const H = 170;
+  const step = max / 200;
+  const clamp = (v: number) => Math.min(max, Math.max(0, v));
+  const nudge = (delta: number) =>
+    onChange(lower ? +clamp(threshold + delta).toPrecision(2)
+                   : Math.round(clamp(threshold + delta) * 100) / 100);
   const setFromX = (clientX: number) => {
     const el = wrap.current;
     if (!el) return;
@@ -53,17 +58,44 @@ export function Calibrate({ runs, threshold, units, semantics, years, polarity,
   };
 
   if (!scores.length)
-    return <p className="muted">No historical scores yet. Run the backtest first.</p>;
+    return (
+      <div className="panel muted">
+        <b>No historical scores yet.</b>
+        <p className="tiny" style={{ marginBottom: 0 }}>
+          The threshold is tuned against this site's own past scores, so calibration has
+          to finish before this histogram can appear. Until then the monitor uses the
+          recipe's conservative default.
+        </p>
+      </div>
+    );
 
   return (
     <div>
-      <div ref={wrap} className="panel"
+      {/* Pointer events, not mouse events: the histogram was mouse-only, so on a
+          tablet the product's central interaction did nothing at all. role=slider
+          plus the key handler make it reachable without a pointer too. */}
+      <div ref={wrap} className="panel" role="slider" tabIndex={0}
+           aria-label="Alert threshold"
+           aria-valuemin={0} aria-valuemax={+max.toFixed(2)} aria-valuenow={threshold}
+           aria-valuetext={`${threshold} ${units}, ${would.length} alerts in ${years} years`}
            style={{ position: "relative", padding: "12px 12px 26px", cursor: "ew-resize",
-                    userSelect: "none" }}
-           onMouseDown={(e) => { setDrag(true); setFromX(e.clientX); }}
-           onMouseMove={(e) => drag && setFromX(e.clientX)}
-           onMouseUp={() => setDrag(false)}
-           onMouseLeave={() => setDrag(false)}>
+                    userSelect: "none", touchAction: "none" }}
+           onPointerDown={(e) => {
+             (e.target as Element).setPointerCapture?.(e.pointerId);
+             setDrag(true); setFromX(e.clientX);
+           }}
+           onPointerMove={(e) => drag && setFromX(e.clientX)}
+           onPointerUp={() => setDrag(false)}
+           onPointerCancel={() => setDrag(false)}
+           onKeyDown={(e) => {
+             const big = max / 20;
+             const d = e.key === "ArrowRight" || e.key === "ArrowUp" ? step
+                     : e.key === "ArrowLeft" || e.key === "ArrowDown" ? -step
+                     : e.key === "PageUp" ? big : e.key === "PageDown" ? -big : 0;
+             if (d) { e.preventDefault(); nudge(d); return; }
+             if (e.key === "Home") { e.preventDefault(); onChange(0); }
+             if (e.key === "End") { e.preventDefault(); onChange(+max.toFixed(2)); }
+           }}>
         <div style={{ display: "flex", alignItems: "flex-end", height: H, gap: 2 }}>
           {bins.map((b, i) => {
             const v = ((i + 0.5) / bins.length) * max;
@@ -92,11 +124,19 @@ export function Calibrate({ runs, threshold, units, semantics, years, polarity,
       </div>
 
       <div className="row" style={{ margin: "12px 0" }}>
-        <input type="range" min={0} max={max} step={max / 400} value={threshold}
-               style={{ flex: 1 }} onChange={(e) => onChange(+e.target.value)} />
-        <input type="number" step={lower ? 0.001 : 0.01} value={threshold}
-               style={{ width: 100 }}
-               onChange={(e) => onChange(+e.target.value)} />
+        <label className="tiny muted" style={{ flex: 1 }}>
+          Threshold
+          <input type="range" min={0} max={max} step={max / 400} value={threshold}
+                 aria-label="Alert threshold" style={{ width: "100%", display: "block" }}
+                 onChange={(e) => onChange(+e.target.value)} />
+        </label>
+        <label className="tiny muted">
+          Exact value
+          <input type="number" step={lower ? 0.001 : 0.01} value={threshold}
+                 min={0} max={+max.toFixed(2)} aria-label="Alert threshold, exact value"
+                 style={{ width: 100, display: "block" }}
+                 onChange={(e) => onChange(+e.target.value)} />
+        </label>
       </div>
 
       <div className="panel" style={{ marginBottom: 12 }}>
@@ -115,10 +155,10 @@ export function Calibrate({ runs, threshold, units, semantics, years, polarity,
           <div key={r.uuid} className="panel calibration-event">
             {(r.summary?.aux as any)?.calibration_chips && (
               <div className="calibration-pair" aria-label="Before and after satellite images">
-                <img src={artifactUrl((r.summary?.aux as any).calibration_chips.before)}
-                     alt={`Before ${r.started_at.slice(0, 10)}`} />
-                <img src={artifactUrl((r.summary?.aux as any).calibration_chips.after)}
-                     alt={`After ${r.started_at.slice(0, 10)}`} />
+                <ChipImage id={(r.summary?.aux as any).calibration_chips.before}
+                           alt={`Before ${r.started_at.slice(0, 10)}`} />
+                <ChipImage id={(r.summary?.aux as any).calibration_chips.after}
+                           alt={`After ${r.started_at.slice(0, 10)}`} />
               </div>
             )}
             <div>

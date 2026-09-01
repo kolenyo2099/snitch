@@ -39,7 +39,9 @@ export interface RunSummary {
    *  worst at its minimum, so nothing should rank runs by score_max alone. */
   score_headline?: number | null; polarity?: string;
   valid_pixels: number; valid_fraction: number; changed_pixels: number;
-  changed_area_m2: number; n_components: number; largest_component_m2: number;
+  changed_area_m2: number; changed_fraction?: number | null;
+  n_components: number; largest_component_m2: number;
+  sensed_at?: string | null;
   direction: Record<string, number> | null; aux: Record<string, any>;
   notes: string[]; threshold: number; units: string;
   mask_summary: Record<string, number | null>;
@@ -56,6 +58,7 @@ export interface Run {
   mask_raster_id: number | null; summary: RunSummary | null;
   supersedes_run_id: number | null; compute_backend: "local" | "gee";
   observations?: Observation[];
+  project_uuid?: string; project_name?: string;
 }
 
 export interface Alert {
@@ -84,6 +87,7 @@ export interface Diagnostic {
   severity: "info" | "warning" | "error"; message: string;
   detail: any; occurred_at: string; resolved_at: string | null;
   acknowledged: number; _type?: "diagnostic";
+  project_name?: string; project_uuid?: string;
 }
 
 export interface Recipe {

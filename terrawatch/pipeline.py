@@ -333,7 +333,7 @@ def _previous_score(con, project_id: int, detector_id: str, sensed_at: str,
                     kind: str) -> np.ndarray | None:
     """Load the immutable prior score for stateful sequential detectors."""
     row = con.execute(
-        "SELECT a.path FROM run r JOIN observation o ON o.id=r.target_observation_id"
+        "SELECT a.sha256 FROM run r JOIN observation o ON o.id=r.target_observation_id"
         " JOIN artifact a ON a.id=r.score_raster_id WHERE r.project_id=?"
         " AND r.detector_id=? AND r.kind=? AND r.status='ok' AND o.sensed_at<?"
         " ORDER BY o.sensed_at DESC LIMIT 1",
@@ -341,7 +341,7 @@ def _previous_score(con, project_id: int, detector_id: str, sensed_at: str,
     if not row:
         return None
     import rasterio
-    with rasterio.open(row["path"]) as src:
+    with rasterio.open(artifacts.path_for(row["sha256"])) as src:
         return src.read(1).astype("float32")
 
 

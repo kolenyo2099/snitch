@@ -208,10 +208,16 @@ main { overflow-x: hidden; }
 .map { height: 520px; border-radius: 9px; overflow: hidden; border: 1px solid var(--line); }
 .map-controls { position: absolute; top: 10px; right: 10px; z-index: 5; background: var(--panel);
   border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; font-size: 12.5px; }
-.swipe-wrap { position: relative; overflow: hidden; border-radius: 8px; border: 1px solid var(--line); }
-.swipe-wrap img { display: block; width: 100%; }
-.swipe-wrap .after { position: absolute; inset: 0; overflow: hidden; }
+.swipe-wrap { position: relative; overflow: hidden; border-radius: 8px; border: 1px solid var(--line);
+  cursor: col-resize; touch-action: none; }
+.swipe-wrap img { display: block; width: 100%; user-select: none; }
+/* the after layer is clipped to the right of the divider; `left` is inline */
+.swipe-wrap .after { position: absolute; top: 0; bottom: 0; right: 0; overflow: hidden; }
 .swipe-handle { position: absolute; top: 0; bottom: 0; width: 2px; background: #fff; cursor: ew-resize; }
+.swipe-handle::before { content: ""; position: absolute; top: 50%; left: 50%;
+  transform: translate(-50%, -50%); width: 26px; height: 26px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 4px rgb(0 0 0 / 0.5); }
+.swipe-handle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .muted { color: var(--dim); }
 .tiny { font-size: 12px; }

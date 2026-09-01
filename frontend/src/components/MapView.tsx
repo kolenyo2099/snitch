@@ -285,25 +285,58 @@ export function DrawMap({ onChange, onPlace, height = 460 }:
   );
 }
 
-/** Identical stretch on both frames, so the comparison cannot manufacture change. */
+/** Identical stretch on both frames, so the comparison cannot manufacture change.
+ *  Before sits on the left, after on the right — and the divider itself is the
+ *  handle: drag anywhere on the frame, or use the slider / arrow keys. */
 export function SwipeCompare({ before, after }: { before?: string; after?: string }) {
-  const [pos, setPos] = useState(50);
+  const [pos, setPos] = useState(50);            // divider position, % from the left
+  const [dragging, setDragging] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
   if (!before || !after) return <p className="muted">No chip pair for this alert.</p>;
+  const p = Math.min(Math.max(pos, 0.5), 99.5);  // keep the clipped layer non-degenerate
+  const moveTo = (clientX: number) => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    if (!r.width) return;
+    setPos(Math.min(100, Math.max(0, ((clientX - r.left) / r.width) * 100)));
+  };
   return (
     <div>
-      <div className="swipe-wrap">
-        <img src={before} alt="Before" loading="lazy" />
-        <div className="after" style={{ width: `${pos}%` }}>
-          <img src={after} alt="After" loading="lazy"
-               style={{ width: `${100 / (pos / 100)}%`, maxWidth: "none" }} />
+      <div ref={wrapRef}
+           className={`swipe-wrap${dragging ? " dragging" : ""}`}
+           onPointerDown={(e) => {
+             e.currentTarget.setPointerCapture(e.pointerId);
+             setDragging(true);
+             moveTo(e.clientX);
+           }}
+           onPointerMove={(e) => { if (dragging) moveTo(e.clientX); }}
+           onPointerUp={() => setDragging(false)}
+           onPointerCancel={() => setDragging(false)}>
+        <img src={before} alt="Before" loading="lazy" draggable={false} />
+        <div className="after" style={{ left: `${p}%` }}>
+          <img src={after} alt="After" loading="lazy" draggable={false}
+               style={{ width: `${10000 / (100 - p)}%`, maxWidth: "none",
+                        marginLeft: `${-(100 * p) / (100 - p)}%` }} />
         </div>
-        <div className="swipe-handle" style={{ left: `${pos}%` }} />
+        <div className="swipe-handle" style={{ left: `${p}%` }}
+             role="slider" tabIndex={0}
+             aria-label="Comparison divider" aria-valuemin={0} aria-valuemax={100}
+             aria-valuenow={Math.round(pos)}
+             onKeyDown={(e) => {
+               const step = e.key === "ArrowLeft" ? -3 : e.key === "ArrowRight" ? 3 : 0;
+               if (!step) return;
+               e.preventDefault();
+               setPos((v) => Math.min(100, Math.max(0, v + step)));
+             }} />
       </div>
-      <input type="range" min={0} max={100} value={pos} style={{ width: "100%" }}
+      <input type="range" min={0} max={100} value={Math.round(pos)}
+             aria-label="Comparison position" style={{ width: "100%" }}
              onChange={(e) => setPos(+e.target.value)} />
       <p className="tiny muted">
-        Both frames use the same stretch, printed on each image. Independently stretched
-        pairs manufacture apparent change and are never produced.
+        Drag the divider — before on the left, after on the right. Both frames use the
+        same stretch, printed on each image; independently stretched pairs manufacture
+        apparent change and are never produced.
       </p>
     </div>
   );

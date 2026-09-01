@@ -697,6 +697,184 @@ def list_detectors():
     return [asdict(d.spec) for d in DETECTORS.values()]
 
 
+# --- runtime configuration (config.yaml, §16) -------------------------------
+#
+# Every consumer reads through config.get() at call time, so mutating the cached
+# dict applies live in this process (API + embedded scheduler). The worker is a
+# separate process and picks changes up on its next restart. Credentials stay out:
+# they are read from the environment by name and are never stored or returned.
+
+_CONFIG_RESTART = {"storage.data_dir"}
+_CONFIG_ENV_ONLY = {"adapters.gee.service_account_json"}
+_CONFIG_SECRET = {"ui.password"}
+
+_CONFIG_HELP = {
+    "storage.data_dir": "Where the database and artifacts live. Changing it needs a restart; existing files do not move.",
+    "storage.max_artifact_gb": "Soft ceiling for the artifact store, reported on the health surface.",
+    "storage.gc_enabled": "Master switch for deleting unreferenced artifacts from this page.",
+    "adapters.cdse.enabled": "Enable the Copernicus Data Space catalogue.",
+    "adapters.cdse.timeout_s": "Per-request timeout, in seconds, for CDSE.",
+    "adapters.earthsearch.enabled": "Enable the open Earth Search fallback catalogue.",
+    "adapters.planetary.enabled": "Enable Microsoft Planetary Computer (Sentinel-1 RTC).",
+    "adapters.planetary.collection": "Planetary Computer collection id for RTC scenes.",
+    "adapters.gee.enabled": "Allow projects to use Google Earth Engine for baselines and backtests.",
+    "adapters.gee.project_id": "GEE cloud project id used for submitted tasks.",
+    "adapters.gee.monthly_eecu_budget": "Monthly EECU-hour budget before tasks degrade to restricted mode.",
+    "adapters.gee.daily_eecu_cap": "Daily EECU-hour cap mirrored from your Cloud console setting.",
+    "adapters.gee.batch_export_eecu": "Tasks at or above this estimate go through batch Export.",
+    "adapters.gee.export_bucket": "Bucket for batch exports (required once batch_export_eecu applies).",
+    "adapters.gee.eecu_per_megapixel": "Cost model used to estimate a task's EECU-hours.",
+    "scheduler.max_concurrent_runs": "Runs this installation processes at once.",
+    "scheduler.poll_jitter_minutes": "Random delay added to scheduled polls so installs don't stampede the catalogue.",
+    "alerts.default_exit_ratio": "Fraction of peak area below which an open incident closes.",
+    "alerts.incident_window_days": "Crossings within this many days group into one incident.",
+    "alerts.cooldown_days": "After an incident closes, the same area stays quiet this long.",
+    "alerts.notification_cooldown_hours": "Minimum hours between notifications for related alerts.",
+    "explanations.vlm_enabled": "Let a vision model draft alert explanations (marked unverified).",
+    "explanations.vlm_endpoint": "OpenAI-compatible endpoint for the vision model.",
+    "explanations.vlm_model": "Model name the endpoint is queried with.",
+    "ui.password": "Gate the API behind a password. Write-only: never returned. Blank means keep the current one.",
+}
+
+
+def _env_name(dotted: str) -> str:
+    return "TW_" + dotted.replace(".", "__").upper()
+
+
+def _walk_leaves(node: Any, prefix: str = ""):
+    for k, v in (node or {}).items():
+        dotted = f"{prefix}.{k}" if prefix else k
+        if isinstance(v, dict):
+            yield from _walk_leaves(v, dotted)
+        else:
+            yield dotted, v
+
+
+def _value_type(v: Any) -> str:
+    if isinstance(v, bool): return "bool"
+    if isinstance(v, int): return "int"
+    if isinstance(v, float): return "float"
+    if isinstance(v, list): return "list"
+    return "str"
+
+
+@app.get(f"{V1}/config")
+def get_config():
+    keys: dict[str, Any] = {}
+    for dotted, v in _walk_leaves(config.config()):
+        env = os.environ.get(_env_name(dotted))
+        secret = dotted in _CONFIG_SECRET or dotted in _CONFIG_ENV_ONLY
+        keys[dotted] = {
+            # §16: credential values are never returned — presence only.
+            "value": None if secret else v,
+            "type": _value_type(v),
+            "set": (v is not None) if secret else None,
+            "env": _env_name(dotted) if env is not None else None,
+            "restart": dotted in _CONFIG_RESTART,
+            "readOnly": dotted in _CONFIG_ENV_ONLY or env is not None,
+            "help": _CONFIG_HELP.get(dotted, ""),
+        }
+    return {"path": config.PATH, "keys": keys}
+
+
+class ConfigIn(BaseModel):
+    values: dict[str, Any]
+
+
+@app.put(f"{V1}/config")
+def put_config(body: ConfigIn):
+    import yaml
+    results: dict[str, str] = {}
+    rejected: dict[str, str] = {}
+    root = config.config()
+
+    def node_for(dotted: str):
+        parts = dotted.split(".")
+        node = root
+        for p in parts[:-1]:
+            if not isinstance(node, dict) or p not in node:
+                return None, None
+            node = node[p]
+        return node, parts[-1]
+
+    def coerce(dotted: str, current: Any, value: Any):
+        t = _value_type(current)
+        if t == "bool":
+            if not isinstance(value, bool): raise ValueError("expects true or false")
+        elif t == "int":
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError("expects a whole number")
+        elif t == "float":
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError("expects a number")
+        elif t == "list":
+            if isinstance(value, str):
+                value = [s.strip() for s in value.replace("\n", ",").split(",") if s.strip()]
+            if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+                raise ValueError("expects a list of names")
+        else:
+            if value is not None and not isinstance(value, str):
+                raise ValueError("expects text")
+        return value
+
+    updates: list[tuple[str, Any]] = []
+    for dotted, value in (body.values or {}).items():
+        node, leaf = node_for(dotted)
+        if node is None or leaf not in node:
+            rejected[dotted] = "unknown key — config.yaml defines the schema"
+            continue
+        if dotted in _CONFIG_ENV_ONLY:
+            rejected[dotted] = "this credential is read from the environment, by design"
+            continue
+        if os.environ.get(_env_name(dotted)):
+            rejected[dotted] = (f"overridden by environment variable "
+                                f"{_env_name(dotted)} — it would win on restart")
+            continue
+        secret = dotted in _CONFIG_SECRET
+        try:
+            if secret and isinstance(value, str) and value.strip() == "":
+                continue  # blank on a write-only field means "keep"
+            coerced = coerce(dotted, node[leaf], value)
+        except ValueError as e:
+            rejected[dotted] = str(e)
+            continue
+        updates.append((dotted, coerced))
+        results[dotted] = "restart" if dotted in _CONFIG_RESTART else "live"
+
+    if updates:
+        import copy
+        path = config.PATH
+        # First UI write keeps the hand-edited file as .orig; comments in the live
+        # file are rewritten by safe_dump either way.
+        orig = path + ".orig"
+        if os.path.exists(path) and not os.path.exists(orig):
+            with open(path, "rb") as src, open(orig, "wb") as dst:
+                dst.write(src.read())
+
+        def set_path(d: dict, dotted: str, value: Any) -> None:
+            parts = dotted.split(".")
+            for p in parts[:-1]:
+                d = d[p]
+            d[parts[-1]] = value
+
+        # Serialise the updated copy before touching memory: if dumping fails,
+        # file and memory stay consistent instead of diverging.
+        snapshot = copy.deepcopy(root)
+        for dotted, value in updates:
+            set_path(snapshot, dotted, value)
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            f.write("# Managed through the TerraWatch UI; the hand-edited original"
+                    " is preserved as config.yaml.orig\n")
+            yaml.safe_dump(snapshot, f, sort_keys=False)
+        for dotted, value in updates:
+            set_path(root, dotted, value)
+        os.replace(tmp, path)
+        # The cached dict was mutated in place: every config.get() in this process
+        # now returns the new values (the worker picks the file up on restart).
+    return {"applied": results, "rejected": rejected}
+
+
 @app.get(f"{V1}/health")
 def health(c=Depends(con), check_adapters: bool = False):
     queue = {r["status"]: r["n"] for r in c.execute(

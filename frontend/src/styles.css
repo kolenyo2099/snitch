@@ -110,6 +110,21 @@ button.link { background: none; border: 0; padding: 0; color: var(--accent);
 .bulk-bar { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px;
   padding: 8px 10px; align-items: center; }
 
+/* config editor: one labelled row per yaml key */
+.cfg-sections { display: grid; gap: 12px; }
+.cfg-section { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px 12px;
+  margin: 0; }
+.cfg-section legend { font-weight: 600; padding: 0 6px; }
+.cfg-grid { display: grid; gap: 10px; }
+.cfg-row { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr);
+  gap: 12px; align-items: start; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.cfg-row:last-child { border-bottom: 0; }
+.cfg-name .chip { margin-left: 6px; }
+.cfg-help { margin-top: 3px; max-width: 60ch; }
+.cfg-input input[type="text"], .cfg-input input[type="number"],
+.cfg-input input[type="password"] { width: 100%; max-width: 420px; }
+@media (max-width: 760px) { .cfg-row { grid-template-columns: 1fr; } }
+
 /* run status chips on the Runs tab */
 .chip.run-ok { border-color: var(--green); color: var(--green); }
 .chip.run-failed { border-color: var(--red); color: var(--red);

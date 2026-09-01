@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api } from "../api";
 import { useApi } from "../useApi";
 import { Async, ErrorBox } from "../components/Async";
+import { ConfigEditor } from "../components/ConfigEditor";
 import { DetectorSpec, Recipe } from "../types";
 
 const GB = (b: number) => (b / 1e9).toFixed(2) + " GB";
@@ -34,8 +35,8 @@ export default function Settings() {
   return (
     <>
       <h1 className="page">Settings</h1>
-      <p className="sub">Configuration lives in <code>config.yaml</code>; every key is
-        overridable with a <code>TW_SECTION__KEY</code> environment variable.</p>
+      <p className="sub">Everything the <code>config.yaml</code> used to hold, editable
+        right here. Environment overrides (<code>TW_SECTION__KEY</code>) still win.</p>
 
       {/* Everything below reports on the server. If the server cannot be reached, say
           so once at the top — the panels used to render "not configured" and zeroes,
@@ -45,6 +46,8 @@ export default function Settings() {
       )}
 
       <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))" }}>
+        <ConfigEditor onSaved={health.reload} />
+
         <div className="panel">
           <h3 className="card">Data sources</h3>
           <table>
@@ -165,7 +168,8 @@ export default function Settings() {
             <button disabled={gcBusy} onClick={() => runGc(true)}>Preview cleanup</button>
             <button className="danger" disabled={gcBusy || !health.data?.storage?.gc_enabled}
                     title={health.data && !health.data.storage?.gc_enabled
-                      ? "Enable storage.gc_enabled in config.yaml first" : undefined}
+                      ? "Enable storage.gc_enabled in the Configuration panel above first"
+                      : undefined}
                     onClick={() => runGc(false)}>
               Delete unreferenced artifacts
             </button>
@@ -173,9 +177,8 @@ export default function Settings() {
           {gcErr && <ErrorBox error={gcErr} what="The cleanup" />}
           {health.data && !health.data.storage?.gc_enabled && (
             <p className="tiny muted">
-              Deletion is disabled by <code>storage.gc_enabled: false</code> in
-              config.yaml — the preview works, deletion stays unavailable until you
-              enable it.
+              Deletion is disabled by <code>storage.gc_enabled: false</code> — flip it in
+              the Configuration panel above and this button unlocks.
             </p>
           )}
           {gcResult && (

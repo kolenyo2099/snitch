@@ -75,6 +75,11 @@ export const api = {
     req<any>(`/diagnostics/${id}/acknowledge`, { method: "POST" }),
   recipes: () => req<any[]>("/recipes"),
   detectors: () => req<any[]>("/detectors"),
+  configGet: () =>
+    req<{ path: string; keys: Record<string, any> }>("/config"),
+  configPut: (values: Record<string, any>) =>
+    req<{ applied: Record<string, string>; rejected: Record<string, string> }>(
+      "/config", { method: "PUT", body: JSON.stringify({ values }) }),
   artifactOverlay: (id: number) => req<any>(`/artifacts/${id}/overlay`),
   gc: (dry = true) => req<any>(`/maintenance/gc?dry_run=${dry}`, { method: "POST" }),
 };

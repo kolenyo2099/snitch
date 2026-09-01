@@ -292,3 +292,68 @@ def test_bulk_triage_marks_many_alerts_in_one_call(client):
         "SELECT user_status FROM alert WHERE uuid IN (?,?,?)", uuids)]
     con.close()
     assert statuses == ["false", "false", "false"]
+
+
+def test_config_ui_roundtrip(client, monkeypatch, tmp_path):
+    """Settings edits go through the API: applied live, secrets never returned,
+    environment overrides refused, file rewritten with a backup."""
+    import yaml
+    from terrawatch import config as cfgmod
+    yml = tmp_path / "config.yaml"
+    yml.write_text(yaml.safe_dump({
+        "storage": {"gc_enabled": False, "max_artifact_gb": 50, "data_dir": "./data"},
+        "alerts": {"cooldown_days": 45},
+        "explanations": {"vlm_endpoint": None},
+        "ui": {"password": "sekret"},
+    }))
+    monkeypatch.setattr(cfgmod, "PATH", str(yml))
+    monkeypatch.setenv("TW_ALERTS__COOLDOWN_DAYS", "60")
+    cfgmod.config.cache_clear()
+    auth = {"x-terrawatch-password": "sekret"}
+    try:
+        keys = client.get("/api/v1/config", headers=auth).json()["keys"]
+
+        # §16: the password is never returned, only its presence.
+        assert keys["ui.password"]["value"] is None
+        assert keys["ui.password"]["set"] is True
+        # An env override is reported with its effective value.
+        assert keys["alerts.cooldown_days"]["value"] == 60
+        assert keys["alerts.cooldown_days"]["env"] == "TW_ALERTS__COOLDOWN_DAYS"
+
+        # Env-overridden keys are refused: the variable would win on restart.
+        r = client.put("/api/v1/config", headers=auth,
+                       json={"values": {"alerts.cooldown_days": 10}})
+        assert "overridden" in r.json()["rejected"]["alerts.cooldown_days"]
+
+        # Unknown keys are refused; the file defines the schema.
+        r = client.put("/api/v1/config", headers=auth,
+                       json={"values": {"nope.key": 1}})
+        assert "unknown" in r.json()["rejected"]["nope.key"]
+
+        # A normal edit applies live in this process and lands on disk.
+        r = client.put("/api/v1/config", headers=auth,
+                       json={"values": {"storage.max_artifact_gb": 20}})
+        assert r.json()["applied"]["storage.max_artifact_gb"] == "live"
+        assert cfgmod.get("storage.max_artifact_gb") == 20
+        on_disk = yaml.safe_load(yml.read_text())
+        assert on_disk["storage"]["max_artifact_gb"] == 20
+        assert (tmp_path / "config.yaml.orig").exists(), "hand-edited original kept"
+
+        # A restart-only key is applied but labelled.
+        r = client.put("/api/v1/config", headers=auth,
+                       json={"values": {"storage.data_dir": "./data2"}})
+        assert r.json()["applied"]["storage.data_dir"] == "restart"
+
+        # The write-only password can be set; it still never comes back.
+        r = client.put("/api/v1/config", headers=auth,
+                       json={"values": {"ui.password": "nueva"}})
+        assert r.json()["applied"]["ui.password"] == "live"
+        # Even the middleware now enforces the new password.
+        assert client.get("/api/v1/config",
+                          headers=auth).status_code == 401
+        assert client.get("/api/v1/config",
+                          headers={"x-terrawatch-password": "nueva"}
+                          ).json()["keys"]["ui.password"]["value"] is None
+        assert cfgmod.get("ui.password") == "nueva"
+    finally:
+        cfgmod.config.cache_clear()

@@ -8,7 +8,7 @@ import { DiagnosticsPanel } from "../components/Diagnostics";
 import { MapView } from "../components/MapView";
 import { Timeline } from "../components/Timeline";
 import { CaveatChips, RecipeLink, STATUS_HELP } from "../components/Chips";
-import { ImageryGallery } from "../components/Imagery";
+import { DateCompare, ImageryGallery, collectImagery } from "../components/Imagery";
 import { Methodologies } from "../components/Methodologies";
 import { ProjectProgress } from "../components/Progress";
 import { RunsTable } from "../components/RunsTable";
@@ -51,6 +51,9 @@ export default function ProjectDetail() {
   const [cmpPick, setCmpPick] = useState<string | null>(null);
   const [alertSev, setAlertSev] = useState("");
   const [alertTriage, setAlertTriage] = useState("");
+  // With several methodologies on one AOI, each has its own threshold and score
+  // units — a blended timeline plots incompatible quantities on one axis.
+  const [methSel, setMethSel] = useState<number | "">("");
 
   const state = useApi<Bundle>(async () => {
     const p = await api.project(uuid);
@@ -215,11 +218,43 @@ export default function ProjectDetail() {
                     <NoAlerts runs={runs} best={best} threshold={threshold}
                               units={units} onCalibrate={() => setTab("Methods")} />
                   )}
+                  {/* The spec's swipe comparator, minus the tiler: chips from this
+                      project share one baseline stretch, so any two dates can swipe. */}
+                  <DateCompare sets={collectImagery(alerts, runs, obs)} />
                 </div>
               )}
 
-              {tab === "Timeline" && (
+              {tab === "Timeline" && (() => {
+                const meth = p.methodologies?.find((m) => m.id === methSel);
+                const tlRuns = meth ? runs.filter((r) => r.methodology_id === meth.id) : runs;
+                const tlThreshold = meth?.params?.threshold ?? threshold;
+                const tlUnits = meth
+                  ? detectors.find((d) => d.id ===
+                      allRecipes.find((r) => r.id === meth.recipe_id)?.detector)?.score_units
+                    || ""
+                  : units;
+                return (
                 <div className="panel">
+                  {(p.methodologies?.length ?? 0) > 1 && (
+                    <div className="row" style={{ marginBottom: 10 }}>
+                      <label className="tiny muted">Methodology<br />
+                        <select value={methSel}
+                                onChange={(e) =>
+                                  setMethSel(e.target.value === "" ? "" : Number(e.target.value))}>
+                          <option value="">All methodologies</option>
+                          {p.methodologies!.map((m) => (
+                            <option key={m.id} value={m.id}>
+                              {allRecipes.find((r) => r.id === m.recipe_id)?.plain_question
+                                || m.recipe_id}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <p className="tiny muted" style={{ alignSelf: "flex-end", margin: 0 }}>
+                        Each methodology scores in its own units — never blended.
+                      </p>
+                    </div>
+                  )}
                   {cmpPick && (
                     <p className="tiny" role="status" style={{ marginTop: 0 }}>
                       Picked <span className="mono">{cmpPick.slice(0, 8)}</span> —
@@ -228,8 +263,8 @@ export default function ProjectDetail() {
                       <button className="link" onClick={() => setCmpPick(null)}>cancel</button>.
                     </p>
                   )}
-                  <Timeline observations={obs} runs={runs} threshold={threshold}
-                            units={units}
+                  <Timeline observations={obs} runs={tlRuns} threshold={tlThreshold}
+                            units={tlUnits}
                             polarity={latestRun?.summary?.polarity ?? spec?.score_polarity}
                             onSelect={(t, shift) => {
                               if (!t.run) return;
@@ -249,10 +284,12 @@ export default function ProjectDetail() {
                     red means the run itself failed.
                   </p>
                 </div>
-              )}
+                );
+              })()}
 
               {tab === "Runs" && (
-                <RunsTable runs={runs} recipes={allRecipes} detectors={detectors} />
+                <RunsTable runs={runs} recipes={allRecipes} detectors={detectors}
+                           methodologies={p.methodologies} />
               )}
 
               {tab === "Methods" && (

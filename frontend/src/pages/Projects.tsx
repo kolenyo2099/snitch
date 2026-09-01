@@ -22,11 +22,17 @@ export default function Projects() {
       return Promise.all(ps.map(async (p) => {
         const [runs, inc, h] = await Promise.all([
           api.runs(p.uuid), api.incidents(p.uuid), api.projectHealth(p.uuid)]);
+        // One sparkline per *methodology*, not one blended line: z-scores and p-values
+        // on the same polyline is a chart that lies. The primary method's runs are the
+        // project headline; the rest live on the Runs tab.
+        const primary = p.methodologies?.[0];
+        const mine = runs.items.filter(
+          (r: any) => !primary || r.methodology_id === primary.id);
         return {
           ...p,
           // Polarity-correct headline where present: p-value detectors alert on a
           // *low* score, and plotting score_p99 alone inverted their story.
-          scores: runs.items.slice(0, 40).reverse()
+          scores: mine.slice(0, 40).reverse()
             .map((r: any) => r.summary?.score_headline ?? r.summary?.score_p99)
             .filter((v: any) => v != null),
           open_incidents: inc.items.filter((i: any) => i.state !== "closed").length,

@@ -106,6 +106,53 @@ export default function Dashboard() {
     try { await api.triage(a.uuid, { user_status: status }); }
     catch (e: any) { setItems(prev); setActionError(e.message || "That action failed."); }
   };
+  // One decision over many alerts. Selections are by uuid so a background poll
+  // reshuffling the list can't silently change what gets triaged.
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const bulk = async (status: string) => {
+    const uuids = [...sel];
+    const prev = items;
+    setItems((cur) => cur.map((it) =>
+      it._type !== "diagnostic" && sel.has((it as Alert).uuid)
+        ? { ...(it as Alert), user_status: status as Alert["user_status"] }
+        : it));
+    setSel(new Set());
+    try { await api.triageBulk(uuids, status); }
+    catch (e: any) { setItems(prev); setActionError(e.message || "That action failed."); }
+  };
+  const toggle = (a: Alert, v: boolean) => {
+    setSel((cur) => {
+      const n = new Set(cur);
+      if (v) n.add(a.uuid); else n.delete(a.uuid);
+      return n;
+    });
+  };
+
+  // Keyboard triage: j/k move, x selects, t/f/u/a decide. The card in focus answers,
+  // so the whole queue can be cleared from the keyboard.
+  const cardRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const focusIdx = useRef(-1);
+  const onFeedKey = (e: React.KeyboardEvent) => {
+    const tag = (e.target as HTMLElement)?.tagName;
+    if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+    const step = e.key === "j" || e.key === "ArrowDown" ? 1
+               : e.key === "k" || e.key === "ArrowUp" ? -1 : 0;
+    if (step) {
+      e.preventDefault();
+      focusIdx.current = Math.min(Math.max(focusIdx.current + step, 0), visible.length - 1);
+      cardRefs.current[focusIdx.current]?.focus();
+      return;
+    }
+    if (focusIdx.current < 0 || focusIdx.current >= visible.length) return;
+    const it = visible[focusIdx.current];
+    if (!it || it._type === "diagnostic") return;
+    const a = it as Alert;
+    if (e.key === "x") { e.preventDefault(); toggle(a, !sel.has(a.uuid)); }
+    else if (e.key === "t") { e.preventDefault(); triage(a, "true"); }
+    else if (e.key === "f") { e.preventDefault(); triage(a, "false"); }
+    else if (e.key === "u") { e.preventDefault(); triage(a, "unclear"); }
+    else if (e.key === "a") { e.preventDefault(); triage(a, "acknowledged"); }
+  };
   const ackDiag = async (d: Diagnostic, fn: () => Promise<unknown>) => {
     setActionError(undefined);
     try { await fn(); setItems((cur) => cur.filter((it) => it !== d)); health.reload(); }
@@ -188,6 +235,23 @@ export default function Dashboard() {
         </p>
       )}
 
+      {sel.size > 0 && (
+        <div className="row bulk-bar" role="toolbar" aria-label="Bulk triage"
+             style={{ marginBottom: 10 }}>
+          <b className="tiny">{sel.size} selected:</b>
+          {([["true", "Real change"], ["false", "False alarm"], ["unclear", "Unclear"],
+             ["acknowledged", "Acknowledge"]] as const).map(([s, label]) => (
+            <button key={s} onClick={() => bulk(s)}>{label}</button>
+          ))}
+          <button className="tiny"
+                  onClick={() => setSel(new Set(visible
+                    .filter((it) => it._type !== "diagnostic").map((it) => (it as Alert).uuid)))}>
+            Select all shown alerts
+          </button>
+          <button onClick={() => setSel(new Set())}>Clear</button>
+        </div>
+      )}
+
       {feedLoading ? (
         <p className="muted" role="status">Loading the feed…</p>
       ) : visible.length === 0 ? (
@@ -212,26 +276,37 @@ export default function Dashboard() {
           )}
         </div>
       ) : (
-        <div className="grid">
-          {visible.map((it) =>
-            it._type === "diagnostic"
-              ? <DiagnosticCard key={`d${it.id}`} d={it as Diagnostic}
-                                codeCount={codeCounts.get((it as Diagnostic).code)}
-                                onAck={() => ackDiag(it as Diagnostic,
-                                  () => api.ackDiagnostic((it as Diagnostic).id))}
-                                onAckCode={() => ackDiag(it as Diagnostic, () =>
-                                  api.ackDiagnosticCode((it as Diagnostic).code,
-                                    (it as Diagnostic).project_uuid || undefined))} />
-              : <AlertCard key={`a${it.id}`} a={it as Alert}
-                           units={unitsByRecipe.data?.[
-                             health.data?.find(({ p }) => p.uuid === (it as Alert).project_uuid)
-                               ?.p.recipe_id || ""]?.units}
-                           semantics={unitsByRecipe.data?.[
-                             health.data?.find(({ p }) => p.uuid === (it as Alert).project_uuid)
-                               ?.p.recipe_id || ""]?.semantics}
-                           onTriage={(s) => triage(it as Alert, s)} />
-          )}
-        </div>
+        <>
+          <p className="tiny muted" style={{ marginTop: 0 }}>
+            Keyboard triage: <b>j</b>/<b>k</b> move · <b>x</b> select · <b>t</b> real
+            change · <b>f</b> false alarm · <b>u</b> unclear · <b>a</b> acknowledge
+          </p>
+          <div className="grid" onKeyDown={onFeedKey}>
+            {visible.map((it, i) => (
+              <div key={it._type === "diagnostic" ? `d${it.id}` : `a${(it as Alert).uuid}`}
+                   ref={(el) => { cardRefs.current[i] = el; }} tabIndex={-1}>
+                {it._type === "diagnostic"
+                  ? <DiagnosticCard d={it as Diagnostic}
+                                    codeCount={codeCounts.get((it as Diagnostic).code)}
+                                    onAck={() => ackDiag(it as Diagnostic,
+                                      () => api.ackDiagnostic((it as Diagnostic).id))}
+                                    onAckCode={() => ackDiag(it as Diagnostic, () =>
+                                      api.ackDiagnosticCode((it as Diagnostic).code,
+                                        (it as Diagnostic).project_uuid || undefined))} />
+                  : <AlertCard a={it as Alert}
+                               units={unitsByRecipe.data?.[
+                                 health.data?.find(({ p }) => p.uuid === (it as Alert).project_uuid)
+                                   ?.p.recipe_id || ""]?.units}
+                               semantics={unitsByRecipe.data?.[
+                                 health.data?.find(({ p }) => p.uuid === (it as Alert).project_uuid)
+                                   ?.p.recipe_id || ""]?.semantics}
+                               selected={sel.has((it as Alert).uuid)}
+                               onSelect={(v) => toggle(it as Alert, v)}
+                               onTriage={(s) => triage(it as Alert, s)} />}
+              </div>
+            ))}
+          </div>
+        </>
       )}
 
       {/* Older items exist: the cursor was always returned, it was just dropped. */}

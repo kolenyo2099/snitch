@@ -51,14 +51,21 @@ export function Timeline({ observations, runs, threshold, units, polarity,
           run, obs: o,
         };
       });
-    // expected-but-absent acquisition slots become explicit grey ticks
+    // expected-but-absent acquisition slots become explicit grey ticks, spaced by
+    // this site's own median revisit — a hardcoded cadence presented a guess as fact
+    const gaps: number[] = [];
+    for (let i = 1; i < rows.length; i++)
+      gaps.push(Date.parse(rows[i].date) - Date.parse(rows[i - 1].date));
+    gaps.sort((a, b) => a - b);
+    const cadence = gaps.length
+      ? Math.max(2, Math.round(gaps[Math.floor(gaps.length / 2)] / 864e5)) : 5;
     const out: Tick[] = [];
     for (let i = 0; i < rows.length; i++) {
       out.push(rows[i]);
       if (i + 1 < rows.length) {
         const gap = (Date.parse(rows[i + 1].date) - Date.parse(rows[i].date)) / 864e5;
-        for (let k = 1; k * 5 < gap - 2 && k < 12; k++) {
-          const d = new Date(Date.parse(rows[i].date) + k * 5 * 864e5);
+        for (let k = 1; k * cadence < gap - 1 && k < 12; k++) {
+          const d = new Date(Date.parse(rows[i].date) + k * cadence * 864e5);
           out.push({ date: d.toISOString().slice(0, 10), state: "none", score: null });
         }
       }

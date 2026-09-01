@@ -252,3 +252,43 @@ def test_a_job_deferred_into_the_future_is_not_called_stalled(client):
         " strftime('%Y-%m-%dT%H:%M:%S+00:00','now'))")
     con.commit(); con.close()
     assert client.get("/api/v1/health").json()["worker"]["ok"] is True
+
+
+def test_bulk_triage_marks_many_alerts_in_one_call(client):
+    """A triage queue cleared one card at a time is a queue you stop clearing."""
+    from terrawatch import db
+    con = db.connect()
+    pid = con.execute(
+        "INSERT INTO project(uuid, name, aoi_geojson, aoi_area_km2, analysis_crs,"
+        " recipe_id, recipe_version, params_json, adapter_preference, schedule_cron,"
+        " status, created_at, updated_at) VALUES"
+        " ('bulk-uuid','Bulk','{}',1,'EPSG:4326','construction_optical','1.0','{}',"
+        " '[]','0 3 * * *','active',datetime('now'),datetime('now'))").lastrowid
+    rid = con.execute(
+        "INSERT INTO run(uuid, project_id, kind, detector_id, detector_version,"
+        " params_json, started_at, status, compute_backend) VALUES"
+        " ('bulk-run',?,'backtest','builtup_dual','1.0','{}',datetime('now'),'ok','local')",
+        (pid,)).lastrowid
+    uuids = []
+    for i in range(3):
+        u = f"bulk-alert-{i}"
+        uuids.append(u)
+        con.execute(
+            "INSERT INTO alert(uuid, project_id, run_id, raised_at, sensed_at,"
+            " severity, confidence, score, threshold, changed_area_m2,"
+            " changed_fraction, n_components, largest_component_m2, geometry_geojson,"
+            " explanation_text, caveats_json, user_status) VALUES"
+            " (?,?,?,datetime('now'),datetime('now'),'high','provisional',3.0,2.5,"
+            " 5000.0,0.01,1,5000.0,'{}','test crossing','[]','new')", (u, pid, rid))
+    con.commit(); con.close()
+
+    r = client.post("/api/v1/alerts/triage",
+                    json={"uuids": uuids, "user_status": "false"})
+    assert r.json()["updated"] == 3
+
+    from terrawatch import db as _db
+    con = _db.connect()
+    statuses = [row["user_status"] for row in con.execute(
+        "SELECT user_status FROM alert WHERE uuid IN (?,?,?)", uuids)]
+    con.close()
+    assert statuses == ["false", "false", "false"]

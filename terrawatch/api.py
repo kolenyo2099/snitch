@@ -179,7 +179,12 @@ def aoi_preview(body: AoiIn):
 
 @app.get(f"{V1}/projects")
 def list_projects(c=Depends(con), limit: int = 50, cursor: int | None = None):
-    return _page(c, "SELECT * FROM project WHERE status != 'deleted'", (), limit, cursor)
+    page = _page(c, "SELECT * FROM project WHERE status != 'deleted'", (), limit, cursor)
+    # Methodologies ride along so list consumers (sparklines, rollups) can group by
+    # methodology without one extra request per monitor.
+    for p in page["items"]:
+        p["methodologies"] = [_row(m) for m in db.ensure_methodologies(c, p["id"])]
+    return page
 
 
 @app.post(f"{V1}/projects", status_code=201)
@@ -549,6 +554,23 @@ def triage(uuid: str, body: TriageIn, c=Depends(con)):
         c.execute(f"UPDATE alert SET {','.join(f'{k}=?' for k in sets)} WHERE uuid=?",
                   (*sets.values(), uuid))
     return alert_detail(uuid, c)
+
+
+class BulkTriageIn(BaseModel):
+    uuids: list[str]
+    user_status: Literal["acknowledged", "true", "false", "unclear"]
+
+
+@app.post(f"{V1}/alerts/triage")
+def triage_bulk(body: BulkTriageIn, c=Depends(con)):
+    """One triage decision over many alerts at once. A queue you clear one card at
+    a time is a queue you stop clearing."""
+    if not body.uuids:
+        return {"ok": True, "updated": 0}
+    marks = ",".join("?" for _ in body.uuids)
+    n = c.execute(f"UPDATE alert SET user_status=? WHERE uuid IN ({marks})",
+                  (body.user_status, *body.uuids)).rowcount
+    return {"ok": True, "updated": n}
 
 
 @app.get(f"{V1}/projects/{{uuid}}/incidents")

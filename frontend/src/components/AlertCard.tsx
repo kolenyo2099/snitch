@@ -7,15 +7,20 @@ const ha = (m2: number) => (m2 / 10000).toFixed(1);
 
 /** Score units live with the detector, not the alert, so callers that know the
  *  project's recipe pass them in; §13.3 forbids a bare number. */
-export function AlertCard({ a, units, semantics, onTriage }:
-  { a: Alert; units?: string; semantics?: string;
-    onTriage?: (s: UserStatus) => void }) {
+export function AlertCard({ a, units, semantics, selected, onSelect, onTriage }:
+  { a: Alert; units?: string; semantics?: string; selected?: boolean;
+    onSelect?: (v: boolean) => void; onTriage?: (s: UserStatus) => void }) {
   return (
     <div className={`alert-card ${a.confidence === "provisional" ? "provisional" : ""}`}>
       <ChipImage id={a.overlay_chip_id} alt="Change overlay" className="thumb" />
       <div className="body">
         <div className="spread">
           <div className="row">
+            {onSelect && (
+              <input type="checkbox" checked={!!selected}
+                     aria-label={`Select the ${a.sensed_at.slice(0, 10)} alert from ${a.project_name || "this monitor"}`}
+                     onChange={(e) => onSelect(e.target.checked)} />
+            )}
             {a.project_uuid
               ? <Link to={`/projects/${a.project_uuid}`}><b>{a.project_name}</b></Link>
               : null}

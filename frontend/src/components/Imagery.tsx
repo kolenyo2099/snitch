@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { artifactUrl } from "../api";
 import { ChipImage } from "./Chip";
+import { SwipeCompare } from "./MapView";
 import { Alert, Observation, Run } from "../types";
 
 /** One rendered frame set for a single acquisition. */
@@ -179,6 +180,53 @@ export function ImageryGallery(
           <span className="muted"> ({shown} of {sets.length} shown)</span>
         </button>
       )}
+    </div>
+  );
+}
+
+/** Any two acquisition dates, swiped. The spec's comparator was about two dates of
+ *  the *same* site; chips from the same project share the baseline stretch, so
+ *  cross-date swiping is legitimate — and it is the fastest way to see "what
+ *  actually changed here between these visits". */
+export function DateCompare({ sets }: { sets: ImageSet[] }) {
+  const ordered = sets.slice().sort((a, b) => a.sensed_at.localeCompare(b.sensed_at));
+  const [beforeKey, setBeforeKey] = useState(ordered[0]?.key ?? "");
+  const [afterKey, setAfterKey] = useState(ordered[ordered.length - 1]?.key ?? "");
+  if (ordered.length < 2) return null;
+  const pick = (key: string) => ordered.find((s) => s.key === key);
+  const before = pick(beforeKey) ?? ordered[0];
+  const after = pick(afterKey) ?? ordered[ordered.length - 1];
+  const frame = (s?: ImageSet) =>
+    s ? artifactUrl(s.after ?? s.before ?? s.overlay ?? null) : undefined;
+  const label = (s: ImageSet) =>
+    `${s.sensed_at.slice(0, 10)}${s.score != null ? ` · ${s.score.toFixed(2)} ${s.units || ""}` : ""}`
+    + ` · ${s.origin === "alert" ? "alert" : "calibration"}`;
+
+  return (
+    <div className="panel">
+      <div className="spread">
+        <h3 className="card" style={{ margin: 0 }}>Before / after, any two dates</h3>
+        <div className="row">
+          <label className="tiny muted">Before<br />
+            <select aria-label="Before date" value={before.key}
+                    onChange={(e) => setBeforeKey(e.target.value)}>
+              {ordered.map((s) => <option key={s.key} value={s.key}>{label(s)}</option>)}
+            </select>
+          </label>
+          <label className="tiny muted">After<br />
+            <select aria-label="After date" value={after.key}
+                    onChange={(e) => setAfterKey(e.target.value)}>
+              {ordered.map((s) => <option key={s.key} value={s.key}>{label(s)}</option>)}
+            </select>
+          </label>
+        </div>
+      </div>
+      <SwipeCompare before={frame(before)} after={frame(after)} />
+      <p className="tiny">
+        {before.href && <Link className="tiny" to={before.href}>{before.sensed_at.slice(0, 10)} →</Link>}
+        {" · "}
+        {after.href && <Link className="tiny" to={after.href}>{after.sensed_at.slice(0, 10)} →</Link>}
+      </p>
     </div>
   );
 }

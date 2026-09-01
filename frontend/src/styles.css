@@ -107,6 +107,8 @@ code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-
 .th-sort:hover { color: var(--accent); }
 button.link { background: none; border: 0; padding: 0; color: var(--accent);
   cursor: pointer; text-decoration: underline; font: inherit; }
+.bulk-bar { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px;
+  padding: 8px 10px; align-items: center; }
 
 /* run status chips on the Runs tab */
 .chip.run-ok { border-color: var(--green); color: var(--green); }

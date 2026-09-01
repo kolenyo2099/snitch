@@ -1,17 +1,19 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { describeDuration } from "../format";
-import { DetectorSpec, Recipe, Run } from "../types";
+import { DetectorSpec, Methodology, Recipe, Run } from "../types";
 
 const head = (r: Run) => r.summary?.score_headline ?? r.summary?.score_p99;
 
 /** Runs were reachable only by clicking timeline ticks, and failed runs were not
  *  reachable at all — they rendered amber, indistinguishable from a cloudy scene.
  *  This is the run collection the data always had. */
-export function RunsTable({ runs, recipes, detectors }: {
+export function RunsTable({ runs, recipes, detectors, methodologies }: {
   runs: Run[]; recipes: Recipe[]; detectors?: DetectorSpec[];
+  methodologies?: Methodology[];
 }) {
   const [status, setStatus] = useState("");
+  const [meth, setMeth] = useState<number | "">("");
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<{ key: "started" | "score" | "took";
                                     dir: 1 | -1 }>({ key: "started", dir: -1 });
@@ -20,10 +22,16 @@ export function RunsTable({ runs, recipes, detectors }: {
   const unitsFor = (r: Run) =>
     detectors?.find((d) => d.id === r.detector_id)?.score_units
       ?? r.summary?.units ?? "";
+  const methLabel = (id: number | null) => {
+    const m = methodologies?.find((x) => x.id === id);
+    if (!m) return undefined;
+    return recipes.find((x) => x.id === m.recipe_id)?.plain_question || m.recipe_id;
+  };
 
   const shown = useMemo(() => {
     const needle = q.trim().toLowerCase();
     const filtered = runs.filter((r) => {
+      if (meth !== "" && r.methodology_id !== meth) return false;
       if (status && r.status !== status) return false;
       if (needle && !`${r.uuid} ${r.detector_id} ${r.kind}`.toLowerCase().includes(needle))
         return false;
@@ -37,7 +45,7 @@ export function RunsTable({ runs, recipes, detectors }: {
         return sort.dir * ((head(b) ?? -Infinity) - (head(a) ?? -Infinity));
       return sort.dir * (took(a) - took(b));
     });
-  }, [runs, status, q, sort]);
+  }, [runs, status, meth, q, sort]);
 
   const arrow = (key: string) =>
     sort.key === key ? (sort.dir === -1 ? " ↓" : " ↑") : "";
@@ -54,6 +62,18 @@ export function RunsTable({ runs, recipes, detectors }: {
         <div className="row">
           <input aria-label="Search runs" placeholder="Search uuid, detector…"
                  value={q} onChange={(e) => setQ(e.target.value)} />
+          {(methodologies?.length ?? 0) > 1 && (
+            <select aria-label="Filter by methodology" value={meth}
+                    onChange={(e) =>
+                      setMeth(e.target.value === "" ? "" : Number(e.target.value))}>
+              <option value="">All methodologies</option>
+              {methodologies!.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {recipes.find((r) => r.id === m.recipe_id)?.plain_question || m.recipe_id}
+                </option>
+              ))}
+            </select>
+          )}
           <select aria-label="Filter by status" value={status}
                   onChange={(e) => setStatus(e.target.value)}>
             <option value="">Any status</option>
@@ -93,10 +113,13 @@ export function RunsTable({ runs, recipes, detectors }: {
                   <td className="tiny">{r.summary?.sensed_at
                     ? String(r.summary.sensed_at).slice(0, 10)
                     : <span className="muted">—</span>}</td>
-                  <td className="tiny">{recipe?.plain_question
+                  <td className="tiny">{methLabel(r.methodology_id)
                     ? <span title={`${r.detector_id} v${r.detector_version}`}>
-                        {recipe.plain_question}</span>
-                    : <span className="mono tiny">{r.detector_id}</span>}</td>
+                        {methLabel(r.methodology_id)}</span>
+                    : recipe?.plain_question
+                      ? <span title={`${r.detector_id} v${r.detector_version}`}>
+                          {recipe.plain_question}</span>
+                      : <span className="mono tiny">{r.detector_id}</span>}</td>
                   <td className="mono tiny">{head(r) != null
                     ? `${head(r)!.toFixed(2)} ${unitsFor(r)}`
                     : <span className="muted">—</span>}</td>

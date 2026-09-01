@@ -59,6 +59,10 @@ export const api = {
   alert: (u: string) => req<any>(`/alerts/${u}`),
   triage: (u: string, body: any) =>
     req<any>(`/alerts/${u}`, { method: "PATCH", body: JSON.stringify(body) }),
+  triageBulk: (uuids: string[], user_status: string) =>
+    req<{ ok: boolean; updated: number }>("/alerts/triage",
+                                         { method: "POST",
+                                           body: JSON.stringify({ uuids, user_status }) }),
   incidents: (u: string) => req<{ items: any[] }>(`/projects/${u}/incidents`),
   feed: (q = "") => req<{ items: any[]; next_cursor?: string | null }>(`/feed${q}`),
   diagnostics: (q = "") => req<{ items: any[]; total?: number }>(`/diagnostics${q}`),

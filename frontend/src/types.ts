@@ -59,6 +59,11 @@ export interface Run {
   supersedes_run_id: number | null; compute_backend: "local" | "gee";
   observations?: Observation[];
   project_uuid?: string; project_name?: string;
+  /** The alert this run raised, if any — run→alert is a graph edge, not a one-way street. */
+  alert?: { uuid: string; severity: Severity; confidence: Confidence;
+            sensed_at: string; raised_at: string; user_status: UserStatus;
+            score: number; threshold: number } | null;
+  supersedes_uuid?: string | null;
 }
 
 export interface Alert {

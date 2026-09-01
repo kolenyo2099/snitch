@@ -1,17 +1,59 @@
 import { useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Legend } from "recharts";
-import { api } from "../api";
+import { api, artifactUrl } from "../api";
 import { useApi } from "../useApi";
 import { Async } from "../components/Async";
+import { ChipImage } from "../components/Chip";
 import { describeDirection, describeDuration, describeParam, describeProvenance } from "../format";
 import { Run } from "../types";
 
 const SCENES_SHOWN = 15;
 
+/** A calibration run keeps its before/after pair in aux; an alert run has no chips of
+ *  its own (they hang off the alert). Absent is rendered as absent, never as blank. */
+function RunChips({ run, label }: { run: Run; label: string }) {
+  const chips = (run.summary?.aux as any)?.calibration_chips;
+  return (
+    <div className="panel">
+      <div className="spread">
+        <b>{label}</b>
+        {run.summary?.sensed_at && (
+          <span className="tiny muted">sensed {String(run.summary.sensed_at).slice(0, 10)}</span>
+        )}
+      </div>
+      {chips ? (
+        <div className="imagery-row">
+          <figure className="imagery-frame">
+            <a href={artifactUrl(chips.before)} target="_blank" rel="noreferrer">
+              <ChipImage id={chips.before} alt={`${label} before`} />
+            </a>
+            <figcaption className="tiny muted">Before</figcaption>
+          </figure>
+          <figure className="imagery-frame">
+            <a href={artifactUrl(chips.after)} target="_blank" rel="noreferrer">
+              <ChipImage id={chips.after} alt={`${label} after`} />
+            </a>
+            <figcaption className="tiny muted">After</figcaption>
+          </figure>
+        </div>
+      ) : (
+        <p className="tiny muted" style={{ marginBottom: 0 }}>
+          No rendered pair for this run.
+        </p>
+      )}
+    </div>
+  );
+}
+
 export default function RunDetail() {
   const { uuid = "" } = useParams();
+  const [sp, setSp] = useSearchParams();
+  const compareUuid = sp.get("compare");
   const state = useApi<Run>(() => api.run(uuid), [uuid]);
+  // The other half of a comparison; absent param, absent fetch.
+  const cmp = useApi<Run | undefined>(async () =>
+    compareUuid ? api.run(compareUuid) : undefined, [compareUuid, uuid]);
   const [allScenes, setAllScenes] = useState(false);
   const [rawParams, setRawParams] = useState(false);
 
@@ -52,9 +94,55 @@ export default function RunDetail() {
                     title="Which backend computed this run">
                 {r.compute_backend}
               </span>
-              {r.supersedes_run_id != null &&
-                <span className="chip">supersedes run #{r.supersedes_run_id}</span>}
+              {r.supersedes_uuid &&
+                <Link className="chip" to={`/runs/${r.supersedes_uuid}`}
+                      title="Re-analysis replaced this run's result — open the superseded one">
+                  supersedes run #{r.supersedes_run_id}
+                </Link>}
+              {!compareUuid && (
+                <button className="tiny"
+                        title="Put this run beside another: before/after pairs and results side by side"
+                        onClick={() => {
+                          const n = new URLSearchParams(sp);
+                          // First entry compares with the superseded run, which is the
+                          // usual question: what did the re-analysis change?
+                          if (r.supersedes_uuid) n.set("compare", r.supersedes_uuid);
+                          setSp(n);
+                        }}>
+                  Compare…
+                </button>
+              )}
             </p>
+
+            {compareUuid && (
+              <div className="spread" style={{ marginBottom: 10 }}>
+                <p className="tiny muted" style={{ margin: 0 }}>
+                  Comparing with{" "}
+                  <span className="mono">{compareUuid.slice(0, 8)}</span>. Both sides use
+                  each frame's recorded stretch — nothing is re-stretched to manufacture
+                  a difference.
+                </p>
+                <button className="tiny" onClick={() => {
+                  const n = new URLSearchParams(sp); n.delete("compare"); setSp(n);
+                }}>Close comparison</button>
+              </div>
+            )}
+
+            {/* The run→alert direction finally exists: this is the alert this run raised. */}
+            {r.alert && (
+              <div className="panel" style={{ marginBottom: 14, borderLeft: "3px solid var(--red)" }}>
+                <div className="spread">
+                  <b>This run raised an alert</b>
+                  <Link className="tiny" to={`/alerts/${r.alert.uuid}`}>alert detail →</Link>
+                </div>
+                <p className="tiny" style={{ margin: "6px 0 0" }}>
+                  severity <span className={`chip sev-${r.alert.severity}`}>{r.alert.severity}</span>{" "}
+                  sensed {r.alert.sensed_at.slice(0, 10)} · score{" "}
+                  <span className="mono">{r.alert.score.toFixed(2)} / thr {r.alert.threshold}</span>
+                  {r.alert.user_status !== "new" && <> · triaged <span className="chip">{r.alert.user_status}</span></>}
+                </p>
+              </div>
+            )}
 
             {r.status === "failed" && (
               <div className="err-box" role="alert" style={{ marginBottom: 14 }}>
@@ -70,12 +158,54 @@ export default function RunDetail() {
               </div>
             )}
 
+            {/* Side-by-side: the two runs' pairs and their key numbers. */}
+            {compareUuid && cmp.data && cmp.data.uuid !== r.uuid && (
+              <div className="grid" style={{ gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
+                <RunChips run={r} label="This run" />
+                <RunChips run={cmp.data} label="Compared run" />
+                <div className="panel" style={{ gridColumn: "1 / -1" }}>
+                  <h3 className="card">Difference</h3>
+                  <table>
+                    <thead><tr><th scope="col"></th><th scope="col">This run</th>
+                      <th scope="col">Compared run</th></tr></thead>
+                    <tbody>
+                      <tr><th scope="row">Headline score</th>
+                          <td className="mono">{(r.summary?.score_headline ?? r.summary?.score_p99)
+                            ? `${(r.summary!.score_headline ?? r.summary!.score_p99)!.toFixed(3)} ${r.summary?.units || ""}`
+                            : "—"}</td>
+                          <td className="mono">{(cmp.data.summary?.score_headline ?? cmp.data.summary?.score_p99)
+                            ? `${(cmp.data.summary!.score_headline ?? cmp.data.summary!.score_p99)!.toFixed(3)} ${cmp.data.summary?.units || ""}`
+                            : "—"}</td></tr>
+                      <tr><th scope="row">Changed area</th>
+                          <td>{((r.summary?.changed_area_m2 ?? 0) / 10000).toFixed(2)} ha</td>
+                          <td>{((cmp.data.summary?.changed_area_m2 ?? 0) / 10000).toFixed(2)} ha</td></tr>
+                      <tr><th scope="row">Patches</th>
+                          <td>{r.summary?.n_components ?? "—"}</td>
+                          <td>{cmp.data.summary?.n_components ?? "—"}</td></tr>
+                      <tr><th scope="row">Usable pixels</th>
+                          <td>{((r.summary?.valid_fraction ?? 0) * 100).toFixed(1)}%</td>
+                          <td>{((cmp.data.summary?.valid_fraction ?? 0) * 100).toFixed(1)}%</td></tr>
+                      <tr><th scope="row">Threshold</th>
+                          <td className="mono">{r.summary?.threshold} {r.summary?.units}</td>
+                          <td className="mono">{cmp.data.summary?.threshold} {cmp.data.summary?.units}</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
             <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))" }}>
               <div className="panel">
                 <h3 className="card">Score distribution ({s?.units})</h3>
                 <p className="tiny muted">
                   Percentiles of this scene's per-pixel scores. The dashed red line is the
                   alert threshold.
+                  {r.score_raster_id != null && <> The full per-pixel{" "}
+                    <a href={artifactUrl(r.score_raster_id)} target="_blank" rel="noreferrer">
+                      score raster</a> is downloadable.</>}
+                  {r.mask_raster_id != null && <> The{" "}
+                    <a href={artifactUrl(r.mask_raster_id)} target="_blank" rel="noreferrer">
+                      valid-pixel mask</a> shows exactly what was usable.</>}
                 </p>
                 <div style={{ height: 200, marginTop: 8 }}>
                   <ResponsiveContainer>

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api } from "../api";
 import { useApi } from "../useApi";
 import { Async, ErrorBox } from "../components/Async";
@@ -11,12 +11,13 @@ import { CaveatChips, RecipeLink, STATUS_HELP } from "../components/Chips";
 import { ImageryGallery } from "../components/Imagery";
 import { Methodologies } from "../components/Methodologies";
 import { ProjectProgress } from "../components/Progress";
+import { RunsTable } from "../components/RunsTable";
 import { describeCron, describeParam, describeProvenance } from "../format";
 import {
   Alert, DetectorSpec, Incident, Observation, Project, ProjectHealth, Recipe, Run,
 } from "../types";
 
-const TABS = ["Map", "Timeline", "Imagery", "Alerts", "Methods", "Health"] as const;
+const TABS = ["Map", "Timeline", "Runs", "Imagery", "Alerts", "Methods", "Health"] as const;
 type Tab = (typeof TABS)[number];
 
 type Bundle = {
@@ -27,6 +28,7 @@ type Bundle = {
 
 export default function ProjectDetail() {
   const { uuid = "" } = useParams();
+  const navigate = useNavigate();
   // The tab lives in the URL: it can be linked, bookmarked, and undone with Back.
   const [sp, setSp] = useSearchParams();
   const raw = sp.get("tab");
@@ -44,6 +46,11 @@ export default function ProjectDetail() {
   const [actionBusy, setActionBusy] = useState<string>();
   const [actionMessage, setActionMessage] = useState<string>();
   const [actionError, setActionError] = useState<string>();
+  // Shift-click compare on the Timeline: first pick is remembered, second opens
+  // the two runs side by side on the run page.
+  const [cmpPick, setCmpPick] = useState<string | null>(null);
+  const [alertSev, setAlertSev] = useState("");
+  const [alertTriage, setAlertTriage] = useState("");
 
   const state = useApi<Bundle>(async () => {
     const p = await api.project(uuid);
@@ -115,6 +122,8 @@ export default function ProjectDetail() {
           .map((r) => r.summary?.score_p99).filter((v): v is number => v != null);
         const best = scored.length ? Math.max(...scored) : null;
         const calibrating = p.status === "calibrating";
+        const spec = detectors.find((d) => d.id === recipe?.detector);
+        const units = latestRun?.summary?.units || spec?.score_units || "";
 
         return (
           <>
@@ -204,28 +213,53 @@ export default function ProjectDetail() {
                     </div>
                   ) : (
                     <NoAlerts runs={runs} best={best} threshold={threshold}
-                              units={latestRun?.summary?.units} onCalibrate={() => setTab("Methods")} />
+                              units={units} onCalibrate={() => setTab("Methods")} />
                   )}
                 </div>
               )}
 
               {tab === "Timeline" && (
                 <div className="panel">
+                  {cmpPick && (
+                    <p className="tiny" role="status" style={{ marginTop: 0 }}>
+                      Picked <span className="mono">{cmpPick.slice(0, 8)}</span> —
+                      shift-click a second scored tick to see the two dates side by
+                      side, or{" "}
+                      <button className="link" onClick={() => setCmpPick(null)}>cancel</button>.
+                    </p>
+                  )}
                   <Timeline observations={obs} runs={runs} threshold={threshold}
-                            units={latestRun?.summary?.units || ""}
-                            polarity={latestRun?.summary?.polarity}
-                            onSelect={(t) => t.run && (window.location.href = `/runs/${t.run.uuid}`)} />
+                            units={units}
+                            polarity={latestRun?.summary?.polarity ?? spec?.score_polarity}
+                            onSelect={(t, shift) => {
+                              if (!t.run) return;
+                              if (shift && cmpPick && cmpPick !== t.run.uuid) {
+                                navigate(`/runs/${t.run.uuid}?compare=${cmpPick}`);
+                                setCmpPick(null);
+                              } else if (shift) {
+                                setCmpPick(t.run.uuid);
+                              } else {
+                                navigate(`/runs/${t.run.uuid}`);
+                              }
+                            }} />
                   <p className="tiny muted" style={{ marginTop: 10 }}>
-                    Click a scored tick to open its run. Amber means the scene arrived but too
-                    little of it was usable to score; grey means nothing was acquired at all.
+                    Click a scored tick to open its run; shift-click two ticks to compare
+                    their dates side by side. Amber means the scene arrived but too little
+                    of it was usable to score; grey (dashed) means nothing was acquired;
+                    red means the run itself failed.
                   </p>
                 </div>
+              )}
+
+              {tab === "Runs" && (
+                <RunsTable runs={runs} recipes={allRecipes} detectors={detectors} />
               )}
 
               {tab === "Methods" && (
                 <Methodologies uuid={uuid} methodologies={p.methodologies || []}
                                recipes={allRecipes} detectors={detectors} runs={runs}
-                               onChange={state.reload} />
+                               onChange={state.reload}
+                               onShowRuns={() => setTab("Runs")} />
               )}
 
               {tab === "Imagery" && (
@@ -236,36 +270,58 @@ export default function ProjectDetail() {
 
               {tab === "Alerts" && (
                 <div className="grid">
+                  <div className="row" role="group" aria-label="Filter alerts">
+                    <label className="tiny muted">Severity<br />
+                      <select value={alertSev} onChange={(e) => setAlertSev(e.target.value)}>
+                        <option value="">Any severity</option>
+                        <option value="high">High</option><option value="medium">Medium</option>
+                        <option value="low">Low</option>
+                      </select>
+                    </label>
+                    <label className="tiny muted">Triage status<br />
+                      <select value={alertTriage} onChange={(e) => setAlertTriage(e.target.value)}>
+                        <option value="">Any status</option>
+                        <option value="new">New</option>
+                        <option value="acknowledged">Acknowledged</option>
+                        <option value="true">Real change</option>
+                        <option value="false">False alarm</option>
+                        <option value="unclear">Unclear</option>
+                      </select>
+                    </label>
+                    {(alertSev || alertTriage) && (
+                      <button style={{ alignSelf: "flex-end" }}
+                              onClick={() => { setAlertSev(""); setAlertTriage(""); }}>
+                        Clear
+                      </button>
+                    )}
+                  </div>
+
                   {incidents.length > 0 && (
                     <div className="panel">
-                      <h3 className="card">Incidents</h3>
-                      <div style={{ overflowX: "auto" }}>
-                        <table>
-                          <thead><tr><th scope="col">Title</th><th scope="col">Opened</th>
-                            <th scope="col">State</th><th scope="col">Peak score</th>
-                            <th scope="col">Cumulative area</th></tr></thead>
-                          <tbody>
-                            {incidents.map((i) => (
-                              <tr key={i.uuid}>
-                                <td>{i.title}</td><td className="tiny">{i.opened_at.slice(0, 10)}</td>
-                                <td><span className="chip">{i.state}</span></td>
-                                <td className="mono">{i.peak_score.toFixed(2)}</td>
-                                <td>{(i.cumulative_area_m2 / 10000).toFixed(1)} ha</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
+                      <h3 className="card">
+                        Incidents ({incidents.length}) — one episode, however many alerts
+                      </h3>
+                      {/* Expandable in place: an incident's member alerts are the
+                          reason it exists, so hiding them behind no route at all was
+                          the graph's most valuable dead end. */}
+                      {incidents.map((i) => (
+                        <IncidentRow key={i.uuid} incident={i}
+                                     alerts={alerts.filter((a) => a.incident_id === i.id)} />
+                      ))}
                     </div>
                   )}
-                  {alerts.map((a) => (
-                    <AlertCard key={a.uuid} a={{ ...a, project_name: p.name, project_uuid: p.uuid }}
-                               onTriage={(s) => act(`triage-${a.uuid}`,
-                                 () => api.triage(a.uuid, { user_status: s }), "Triage saved.")} />
-                  ))}
+                  {alerts
+                    .filter((a) => (!alertSev || a.severity === alertSev)
+                                 && (!alertTriage || a.user_status === alertTriage))
+                    .map((a) => (
+                      <AlertCard key={a.uuid} a={{ ...a, project_name: p.name, project_uuid: p.uuid }}
+                                 units={units} semantics={spec?.threshold_semantics}
+                                 onTriage={(s) => act(`triage-${a.uuid}`,
+                                   () => api.triage(a.uuid, { user_status: s }), "Triage saved.")} />
+                    ))}
                   {!alerts.length && (
                     <NoAlerts runs={runs} best={best} threshold={threshold}
-                              units={latestRun?.summary?.units}
+                              units={units}
                               onCalibrate={() => setTab("Methods")} />
                   )}
                 </div>
@@ -431,8 +487,7 @@ export default function ProjectDetail() {
 function NoAlerts({ runs, best, threshold, units, onCalibrate }: {
   runs: Run[]; best: number | null; threshold: number;
   units?: string; onCalibrate: () => void;
-}) {
-  const scored = runs.filter((r) => r.status === "ok").length;
+}) {  const scored = runs.filter((r) => r.status === "ok").length;
   return (
     <div className="panel">
       <b>No alert has been raised here yet.</b>
@@ -457,6 +512,41 @@ function NoAlerts({ runs, best, threshold, units, onCalibrate }: {
           </p>
           <button onClick={onCalibrate}>Tune the threshold</button>
         </>
+      )}
+    </div>
+  );
+}
+
+/** One incident, expandable to the alerts that make it up. An incident *is* its member
+ *  alerts grouped in time; a closed table hid exactly that. */
+function IncidentRow({ incident, alerts }: { incident: Incident; alerts: Alert[] }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="incident">
+      <button className="incident-head" aria-expanded={open}
+              onClick={() => setOpen(!open)}>
+        <span className="row" style={{ gap: 8, flex: 1, textAlign: "left" }}>
+          <b>{incident.title || `Incident ${incident.uuid.slice(0, 8)}`}</b>
+          <span className="chip">{incident.state}</span>
+          <span className="tiny muted">opened {incident.opened_at.slice(0, 10)}</span>
+          <span className="tiny mono">peak {incident.peak_score.toFixed(2)}</span>
+          <span className="tiny muted">{(incident.cumulative_area_m2 / 10000).toFixed(1)} ha cumulative</span>
+        </span>
+        <span className="tiny">{alerts.length} alert{alerts.length === 1 ? "" : "s"}</span>
+        <span aria-hidden>{open ? "▾" : "▸"}</span>
+      </button>
+      {open && (
+        <div className="incident-body">
+          {alerts.length ? alerts.map((a) => (
+            <AlertCard key={a.uuid}
+                       a={{ ...a, project_uuid: undefined, project_name: undefined }} />
+          )) : (
+            <p className="tiny muted" style={{ margin: 0 }}>
+              Its alerts are not in the loaded page — open the monitor's Alerts tab
+              around {incident.opened_at.slice(0, 10)} to see them.
+            </p>
+          )}
+        </div>
       )}
     </div>
   );

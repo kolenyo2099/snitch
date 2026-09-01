@@ -87,7 +87,8 @@ export default function AlertDetail() {
                 ({(a.changed_fraction * 100).toFixed(2)}% of AOI)</td></tr>
               <tr><th scope="row" style={{ fontWeight: 400 }}>Patches</th><td>{a.n_components}, largest {(a.largest_component_m2 / 10000).toFixed(2)} ha</td></tr>
               <tr><th scope="row" style={{ fontWeight: 400 }} title={(a.recipe as any)?.threshold_semantics}>Score</th>
-                  <td className="mono">{a.score.toFixed(3)} (threshold {a.threshold})</td></tr>
+                  <td className="mono">{a.score.toFixed(3)} {a.run?.summary?.units || ""}
+                    {" "}(threshold {a.threshold} {a.run?.summary?.units || ""})</td></tr>
               <tr><th scope="row" style={{ fontWeight: 400 }}>Which way each signal moved</th>
                   <td>{direction.length
                     ? direction.map((d) => (

@@ -10,10 +10,12 @@ import { DetectorSpec, Methodology, Recipe, Run } from "../types";
  * nothing here is ever summed or averaged across them.
  */
 export function Methodologies(
-  { uuid, methodologies, recipes, detectors, runs, onChange }:
+  { uuid, methodologies, recipes, detectors, runs, onChange, onShowRuns }:
   {
     uuid: string; methodologies: Methodology[]; recipes: Recipe[];
     detectors?: DetectorSpec[]; runs: Run[]; onChange: () => void;
+    /** Jumps to the Runs tab — a count you cannot click is a dead end. */
+    onShowRuns?: () => void;
   },
 ) {
   // Tuning was only reachable from the creation wizard, so an existing monitor could
@@ -76,6 +78,7 @@ export function Methodologies(
         <tbody>
           {methodologies.map((m, i) => {
             const r = recipes.find((x) => x.id === m.recipe_id);
+            const spec = detectors?.find((d) => d.id === r?.detector);
             const mine = runs.filter((run) => run.methodology_id === m.id);
             return (
               <tr key={m.id}>
@@ -89,11 +92,24 @@ export function Methodologies(
                 <td className="tiny">{r?.detector || "—"}</td>
                 <td className="tiny">
                   {m.baseline_artifact_id
-                    ? `${(m.baseline_start || "").slice(0, 10)} → ${(m.baseline_end || "").slice(0, 10)}`
+                    ? <>
+                        {(m.baseline_start || "").slice(0, 10)} → {(m.baseline_end || "").slice(0, 10)}
+                        <div><a className="tiny" href={`/api/v1/artifacts/${m.baseline_artifact_id}/raw`}
+                                target="_blank" rel="noreferrer"
+                                title="The fitted baseline every score of this method is measured against">
+                          baseline artifact ↗</a></div>
+                      </>
                     : <span className="muted">not fitted</span>}
                 </td>
-                <td className="tiny mono">{m.params?.threshold ?? "—"}</td>
-                <td className="tiny">{mine.length || <span className="muted">0</span>}</td>
+                <td className="tiny mono">
+                  {m.params?.threshold ?? "—"}
+                  {m.params?.threshold != null && spec?.score_units
+                    ? <span className="muted"> {spec.score_units}</span> : null}
+                </td>
+                <td className="tiny">{mine.length
+                  ? <a href="#" onClick={(e) => { e.preventDefault(); onShowRuns?.(); }}>
+                      {mine.length} runs</a>
+                  : <span className="muted">0</span>}</td>
                 <td>
                   <div className="row" style={{ gap: 6 }}>
                     <button disabled={busy}

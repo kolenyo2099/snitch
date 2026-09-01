@@ -505,6 +505,16 @@ def run_detail(uuid: str, c=Depends(con)):
                       (r["project_id"],)).fetchone()
     if owner:
         d["project_uuid"], d["project_name"] = owner["uuid"], owner["name"]
+    # The graph's central edge is two-way: a run knows the alert it raised.
+    raised = c.execute(
+        "SELECT uuid, severity, confidence, sensed_at, raised_at, user_status,"
+        " score, threshold FROM alert WHERE run_id=?"
+        " ORDER BY raised_at DESC LIMIT 1", (r["id"],)).fetchone()
+    d["alert"] = _row(raised) if raised else None
+    if r["supersedes_run_id"] is not None:
+        prev = c.execute("SELECT uuid FROM run WHERE id=?",
+                         (r["supersedes_run_id"],)).fetchone()
+        d["supersedes_uuid"] = prev["uuid"] if prev else None
     d["observations"] = [_row(o) for o in c.execute(
         "SELECT * FROM observation WHERE id IN (SELECT value FROM json_each(?))"
         " OR id=?", (r["reference_observation_ids"] or "[]",

@@ -16,6 +16,10 @@ export interface ImageSet {
   hrefLabel: string;
   detector?: string;
   note?: string;
+  /** Polarity-correct headline score, so the gallery can answer "show me the most
+   *  changed pairs" without opening every run. */
+  score?: number | null;
+  units?: string;
 }
 
 /**
@@ -35,6 +39,7 @@ export function collectImagery(alerts: Alert[], runs: Run[], obs: Observation[])
     href: `/alerts/${a.uuid}`,
     hrefLabel: "alert detail →",
     note: a.explanation_text,
+    score: a.score,
   }));
 
   for (const r of runs) {
@@ -52,6 +57,8 @@ export function collectImagery(alerts: Alert[], runs: Run[], obs: Observation[])
       hrefLabel: "run detail →",
       detector: r.detector_id,
       note: "Rendered during backtest calibration, not an alert.",
+      score: r.summary?.score_headline ?? r.summary?.score_p99 ?? null,
+      units: r.summary?.units,
     });
   }
   return sets
@@ -83,8 +90,17 @@ export function ImageryGallery(
 ) {
   const all = collectImagery(alerts, runs, obs);
   const [origin, setOrigin] = useState<"all" | "alert" | "calibration">("all");
+  const [sort, setSort] = useState<"new" | "old" | "score">("new");
   const [shown, setShown] = useState(PAGE);
-  const sets = origin === "all" ? all : all.filter((s) => s.origin === origin);
+  const keep = origin === "all" ? all : all.filter((s) => s.origin === origin);
+  const sets = keep.slice().sort((a, b) => {
+    if (sort === "score")
+      return ((b.score ?? -Infinity) - (a.score ?? -Infinity))
+        || b.sensed_at.localeCompare(a.sensed_at);
+    return sort === "new"
+      ? b.sensed_at.localeCompare(a.sensed_at)
+      : a.sensed_at.localeCompare(b.sensed_at);
+  });
   const page = sets.slice(0, shown);
   const nAlert = all.filter((s) => s.origin === "alert").length;
 
@@ -110,6 +126,16 @@ export function ImageryGallery(
           acquired scene{acquired === 1 ? "" : "s"}. Before and after use an identical
           stretch, so the comparison cannot manufacture change.
         </p>
+        <div className="row" role="group" aria-label="Sort frames">
+          {([["new", "Newest"], ["old", "Oldest"], ["score", "Highest score"]] as const).map(
+            ([k, label]) => (
+              <button key={k} aria-pressed={sort === k}
+                      className={sort === k ? "primary" : ""}
+                      onClick={() => { setSort(k); setShown(PAGE); }}>
+                {label}
+              </button>
+            ))}
+        </div>
         <div className="row" role="group" aria-label="Filter frames">
           {(["all", "alert", "calibration"] as const).map((k) => (
             <button key={k} aria-pressed={origin === k}
@@ -129,6 +155,12 @@ export function ImageryGallery(
               <b>{s.sensed_at.slice(0, 10)}</b>
               <span className="chip">{s.origin === "alert" ? "alert" : "calibration"}</span>
               {s.detector && <span className="chip mono">{s.detector}</span>}
+              {s.score != null && (
+                <span className="chip mono"
+                      title="This frame's headline score — the same number its run shows">
+                  {s.score.toFixed(2)} {s.units || ""}
+                </span>
+              )}
             </div>
             <Link className="tiny" to={s.href}>{s.hrefLabel}</Link>
           </div>

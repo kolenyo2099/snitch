@@ -911,6 +911,17 @@ def _render_chips(con, project, recipe, adapter, base, after_data, mask, scene, 
 def backtest(con, job, payload):
     p, m, recipe, det, params, aoi = _ctx(con, payload["project_id"],
                                           payload.get("methodology_id"))
+    try:
+        return _backtest(con, job, p, m, recipe, det, params, aoi, payload)
+    except Exception:
+        # The API set 'calibrating' when the backtest was requested; a dead job must
+        # not leave the project wearing a state that nothing will ever clear.
+        con.execute("UPDATE project SET status='draft', updated_at=? WHERE id=?"
+                    " AND status='calibrating'", (db.now(), p["id"]))
+        raise
+
+
+def _backtest(con, job, p, m, recipe, det, params, aoi, payload):
     years = payload.get("years", 3)
     adapter = _adapter(con, p, "backtest", recipe["sensor"])
     end = datetime.now(timezone.utc)

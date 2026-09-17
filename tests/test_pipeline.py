@@ -389,3 +389,20 @@ def test_gee_serves_baseline_and_backtest_but_never_forward(env, monkeypatch):
     forward = con.execute("SELECT compute_backend FROM run WHERE kind='forward'"
                           ).fetchone()
     assert forward["compute_backend"] == "local"
+
+
+def test_failed_backtest_releases_the_project_from_calibrating(env, monkeypatch):
+    """A backtest that dies must not leave the project in 'calibrating' forever —
+    that state is owned by the backtest run, success or failure."""
+    con, fake, pipeline = env
+    p = _project(con)
+    con.execute("UPDATE project SET status='calibrating' WHERE id=?", (p["id"],))
+
+    def boom(*a, **k):
+        raise RuntimeError("catalogue unreachable")
+
+    monkeypatch.setattr(fake, "search", boom)
+    with pytest.raises(RuntimeError):
+        pipeline.backtest(con, None, {"project_id": p["id"], "years": 1})
+    assert con.execute("SELECT status FROM project WHERE id=?",
+                       (p["id"],)).fetchone()["status"] == "draft"

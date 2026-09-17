@@ -331,6 +331,19 @@ def diagnostic(con, code: str, severity: str, message: str,
     levels = {"info": 0, "warning": 1, "error": 2}
     severity = max((severity, expected_severity), key=lambda s: levels.get(s, 0))
     detail = {**(detail or {}), "remedy": (detail or {}).get("remedy", remedy)}
+    # A scene-scoped fact is recorded once while it stays open: backtests and
+    # re-analyses revisit the same scenes constantly, and without this the same
+    # warning refloods the panel on every pass (4,305 copies of one fact). The next
+    # occurrence after an acknowledge is recorded again.
+    scene = detail.get("scene")
+    if scene and project_id is not None:
+        seen = con.execute(
+            "SELECT 1 FROM diagnostic WHERE project_id=? AND code=?"
+            " AND acknowledged=0 AND resolved_at IS NULL"
+            " AND json_extract(detail_json, '$.scene')=? LIMIT 1",
+            (project_id, code, scene)).fetchone()
+        if seen:
+            return
     con.execute(
         "INSERT INTO diagnostic(project_id, code, severity, message, detail_json,"
         " occurred_at) VALUES (?,?,?,?,?,?)",

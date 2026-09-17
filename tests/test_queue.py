@@ -118,3 +118,24 @@ def test_legacy_terrawatch_files_are_adopted(tmp_path, monkeypatch):
     (tmp_path / "terrawatch.db").write_bytes(b"")
     db._adopt_legacy_files()
     assert (tmp_path / "terrawatch.db").exists()
+
+
+def test_scene_diagnostics_dedupe_until_acknowledged(con):
+    """Backtests revisit the same scenes on every pass; one open record per
+    (project, code, scene) keeps the panel readable without hiding new facts."""
+    con.execute(
+        "INSERT INTO project(id,uuid,name,aoi_geojson,aoi_area_km2,analysis_crs,"
+        "recipe_id,recipe_version,params_json,adapter_preference,schedule_cron,"
+        "status,created_at,updated_at) VALUES (1,'u','t','{}',1,'EPSG:32631','r','1',"
+        "'{}','[]','* * * * *','draft','t','t')")
+    for _ in range(2):
+        db.diagnostic(con, "MASK_UNAVAILABLE", "warning", "same scene",
+                      project_id=1, detail={"scene": "S1"})
+    db.diagnostic(con, "MASK_UNAVAILABLE", "warning", "other scene",
+                  project_id=1, detail={"scene": "S2"})
+    db.diagnostic(con, "RUN_FAILED", "error", "no scene key", project_id=1)
+    assert con.execute("SELECT COUNT(*) n FROM diagnostic").fetchone()["n"] == 3
+    con.execute("UPDATE diagnostic SET acknowledged=1 WHERE code='MASK_UNAVAILABLE'")
+    db.diagnostic(con, "MASK_UNAVAILABLE", "warning", "after acknowledge",
+                  project_id=1, detail={"scene": "S1"})
+    assert con.execute("SELECT COUNT(*) n FROM diagnostic").fetchone()["n"] == 4

@@ -14,7 +14,7 @@ export default function App() {
     <div className="app">
       <a className="skip-link" href="#content">Skip to content</a>
       <nav className="side" aria-label="Main">
-        <div className="wordmark">TERRA<span>WATCH</span></div>
+        <div className="wordmark">SNIT<span>CH</span></div>
         <NavLink to="/" end>Dashboard</NavLink>
         <NavLink to="/projects">Projects</NavLink>
         <NavLink to="/new">New monitor</NavLink>

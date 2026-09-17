@@ -67,12 +67,32 @@ def test_s2cloudless_fallback_projects_shadows_without_wrapping_edges():
     assert not m[-3:, -3:].any(), "edge clouds must not wrap to the opposite corner"
 
 
-def test_chain_reports_unavailable_preferred_masks_and_uses_scl_fallback():
+def test_unavailable_preferred_masks_are_substituted_from_scl_and_recorded():
+    """CDSE's cloud-probability layers are absent from the other catalogues.
+    Rather than reporting the masks as not applied, the SCL cloud/shadow classes
+    stand in — identical to the declared scl_shadow — and the substitution is
+    recorded on the data so the run can caveat it honestly."""
+    data = _fixture()
     invalid, summary, _ = masks.apply_chain(
-        _fixture(), ["cloudscore_plus", "s2cloudless", "scl_shadow"])
+        data, ["cloudscore_plus", "s2cloudless", "scl_shadow"])
+    assert summary["cloudscore_plus"] is not None
+    assert summary["s2cloudless"] is not None
+    assert invalid.any()
+    # the explicit scl_shadow entry adds nothing: the two substitutions above
+    # already removed exactly those pixels
+    assert summary["scl_shadow"] == 0
+    # counts are "newly removed pixels", so the union is their (deduped) sum
+    assert invalid.sum() == summary["cloudscore_plus"] + summary["s2cloudless"] \
+        + summary["scl_shadow"] + summary["nodata"]
+    assert data["_mask_substitutes"] == {"cloudscore_plus": "scl_shadow",
+                                         "s2cloudless": "scl_shadow"}
+
+
+def test_mask_stays_absent_when_no_scl_exists_to_fall_back_on():
+    data = {"B08": np.ones((8, 8), "float32")}
+    invalid, summary, _ = masks.apply_chain(data, ["cloudscore_plus"])
     assert summary["cloudscore_plus"] is None
-    assert summary["s2cloudless"] is None
-    assert summary["scl_shadow"] > 0 and invalid.any()
+    assert data["_mask_substitutes"] == {}
 
 
 def test_optional_permanent_water_layer_has_named_count():

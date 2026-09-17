@@ -119,6 +119,12 @@ CHAIN = {"cloudscore_plus": cloudscore_plus, "s2cloudless": s2cloudless,
          "scl_shadow": scl_shadow, "snow": snow, "nodata": nodata,
          "slope": slope, "hand": hand, "water_permanent": water_permanent}
 
+#: Probability layers a recipe may declare that a catalogue genuinely does not
+#: publish (CDSE carries neither; Earth Search only carries s2cloudless). When the
+#: scene has the SCL classification band, its cloud/shadow classes stand in —
+#: recorded as a substitution, never silently.
+_SCL_FALLBACKS = ("cloudscore_plus", "s2cloudless")
+
 
 def apply_chain(data: dict, names: list[str], params: dict | None = None):
     """Returns (invalid_mask, {mask_name: pixels_removed}, valid_fraction)."""
@@ -127,8 +133,12 @@ def apply_chain(data: dict, names: list[str], params: dict | None = None):
     invalid = np.zeros(shape, bool)
     summary = {}
     components = {}
+    substitutes = {}
     for n in ["nodata"] + [x for x in names if x in CHAIN and x != "nodata"]:
         m = CHAIN[n](data, params)
+        if m is None and n in _SCL_FALLBACKS and data.get("SCL") is not None:
+            m = scl_shadow(data, params)
+            substitutes[n] = "scl_shadow"
         if m is None:
             summary[n] = None      # declared by the recipe, unavailable at run time
             continue
@@ -140,4 +150,5 @@ def apply_chain(data: dict, names: list[str], params: dict | None = None):
             summary[n] = None      # declared by the recipe, not implemented here
     valid_fraction = float(1.0 - invalid.mean())
     data["_mask_components"] = components
+    data["_mask_substitutes"] = substitutes
     return invalid, summary, valid_fraction

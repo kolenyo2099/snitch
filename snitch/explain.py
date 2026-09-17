@@ -21,6 +21,7 @@ DIAGNOSTICS = {
     "SOURCE_UNREACHABLE": ("error", "Check network and source credentials, then retry; configured fallbacks are attempted automatically."),
     "RUN_FAILED": ("error", "Review the recorded error details, correct the cause, and retry the run."),
     "MASK_UNAVAILABLE": ("warning", "Inspect the run's mask breakdown and use a source that publishes the missing mask when needed."),
+    "CLOUD_MASK_SUBSTITUTED": ("info", "The SCL classification masks clouds and shadows but not thin cirrus; verify that suits your question, or configure a source publishing the declared layers."),
     "SLOW_BACKTEST": ("info", "Let the job finish, or shorten the date range to get results sooner."),
 }
 

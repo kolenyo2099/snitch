@@ -2,12 +2,15 @@
 from __future__ import annotations
 import json
 import time
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import lru_cache
 
 import httpx
 import numpy as np
+
+from . import cdse
 
 ENDPOINTS = {
     "earthsearch": ("https://earth-search.aws.element84.com/v1", "sentinel-2-l2a"),
@@ -150,8 +153,12 @@ class StacAdapter:
         scenes = [scenes] if isinstance(scenes, SceneRef) else list(scenes)
         if not scenes:
             raise ValueError("load requires at least one scene")
-        first_href = self._sign(self._href(scenes[0], bands[0]))
-        with rasterio.open(first_href) as first:
+        # CDSE reads go through /vsis3 with exchanged S3 keys: every open runs
+        # inside that GDAL environment (a no-op for the other adapters).
+        gdal_env = cdse.read_env() if self.name == "cdse" else {}
+        def _env():
+            return rasterio.Env(**gdal_env) if gdal_env else nullcontext()
+        with _env(), rasterio.open(self._sign(self._href(scenes[0], bands[0]))) as first:
             crs = target_crs or str(first.crs)
             res = float(resolution or min(abs(first.transform.a), abs(first.transform.e)))
         analysis_geom = shape(transform_geom("EPSG:4326", crs, aoi))
@@ -180,7 +187,7 @@ class StacAdapter:
             variables = {}
             for band in bands:
                 href = self._sign(self._href(scene, band))
-                with rasterio.open(href) as src:
+                with _env(), rasterio.open(href) as src:
                     source_geom = transform_geom(crs, src.crs, mapping(analysis_geom))
                     clipped, clipped_transform = rio_mask(
                         src, [source_geom], crop=True, filled=True,
@@ -211,28 +218,49 @@ class StacAdapter:
         return xr.concat(datasets, dim="time") if len(datasets) > 1 else datasets[0]
 
     def _sign(self, href: str) -> str:
-        """Planetary Computer blobs need a SAS token. It is handed out anonymously;
-        no account, no credential in config."""
+        """Make an asset href readable. Planetary Computer blobs get an anonymous
+        SAS token; CDSE s3://eodata paths become /vsis3/ paths read with the
+        short-lived S3 keys exchanged by snitch.cdse."""
+        if href.startswith("s3://eodata/"):
+            if not cdse.configured():
+                raise RuntimeError(
+                    "CDSE pixels need CDSE_CLIENT_ID and CDSE_CLIENT_SECRET (an "
+                    "API client created in the CDSE portal); without them only "
+                    "Earth Search can serve optical scenes")
+            return "/vsis3/" + href[len("s3://"):]
         if "blob.core.windows.net" not in href or "?" in href:
             return href
         acct, container = href.split("//")[1].split(".")[0], href.split("/")[3]
         return f"{href}?{sas_token(acct, container)}"
 
-    @staticmethod
-    def _href(scene: SceneRef, band: str) -> str:
+    def _href(self, scene: SceneRef, band: str) -> str:
         assets = scene.item["assets"]
-        for key in (band, band.lower(), _ALIASES.get(band, band)):
+        base = (band, band.lower(), _ALIASES.get(band, band))
+        keys = list(base)
+        if self.name == "cdse":
+            # CDSE's 2025 STAC renamed every band to <BAND>_<res> (B04_10m,
+            # SCL_20m…). Finest first: the analysis grid reprojects either way.
+            keys += [f"{k}_{r}" for k in base for r in ("10m", "20m", "60m")]
+        for key in keys:
             if key in assets:
                 return assets[key]["href"]
         raise KeyError(f"band {band} not in {scene.scene_id}: {sorted(assets)}")
 
     def health(self) -> dict:
         if self.name == "cdse":
-            # The catalogue is public, but its current S2 assets resolve to authenticated
-            # s3://eodata objects. Until that credential exchange is implemented, calling
-            # this adapter healthy would select a source that can search but cannot load.
-            return {"adapter": self.name, "ok": False,
-                    "error": "authenticated CDSE asset access is not configured"}
+            # The catalogue is public; the pixels are not. Healthy means the S3 key
+            # exchange works, not merely that the catalogue answered.
+            if not cdse.configured():
+                return {"adapter": self.name, "ok": False,
+                        "error": "CDSE_CLIENT_ID / CDSE_CLIENT_SECRET are not set; "
+                                 "optical scenes fall back to Earth Search, whose "
+                                 "scenes carry no CDSE cloud layers"}
+            try:
+                cdse.s3_credentials()
+                return {"adapter": self.name, "ok": True,
+                        "s3": "credentials exchanged"}
+            except Exception as e:  # noqa: BLE001
+                return {"adapter": self.name, "ok": False, "error": str(e)}
         try:
             with httpx.Client(timeout=15) as c:
                 r = c.get(f"{self.base}/collections/{self.collection}")

@@ -205,8 +205,15 @@ def _load_masked(con, project, m, recipe, adapter, scene):
     det = DETECTORS[recipe["detector"]]
     bands = list(recipe["bands"])
     assets = scene.item.get("assets", {})
-    for optional in ("cs", "cloud_probability"):
-        if optional in assets and optional not in bands:
+    for optional in ("cs", "cloud_probability", "SCL"):
+        if optional in bands:
+            continue
+        try:
+            present = optional in assets or (
+                hasattr(adapter, "_href") and bool(adapter._href(scene, optional)))
+        except KeyError:
+            present = False
+        if present:
             bands.append(optional)
     data = adapters.load_scene(
         adapter, scene, aoi, bands,
@@ -227,6 +234,14 @@ def _load_masked(con, project, m, recipe, adapter, scene):
                       f"{scene.datetime[:10]}. Anything those masks would have removed "
                       "is still in the score.", project_id=project["id"],
                       detail={"scene": scene.scene_id, "masks": absent})
+    subs = data.get("_mask_substitutes") or {}
+    if subs:
+        db.diagnostic(con, "CLOUD_MASK_SUBSTITUTED", "info",
+                      f"{', '.join(sorted(subs))} is not published by {adapter.name}; "
+                      f"the SCL cloud/shadow classes were used instead for "
+                      f"{scene.datetime[:10]}.", project_id=project["id"],
+                      detail={"scene": scene.scene_id,
+                              "substitutes": sorted(subs)})
     for k, v in data.items():
         if not k.startswith("_"):
             data[k] = np.where(invalid, np.nan, v)
@@ -590,6 +605,10 @@ def run_scene(con, job, payload):
                           "This run uses the optical stream only.", project_id=p["id"])
 
     caveats, notes = [], []
+    if data.get("_mask_substitutes"):
+        # The score is honest, but its cloud mask is the SCL classification, not the
+        # declared probability layer — recorded here and in the evidence bundle.
+        caveats.append("CLOUD_MASK_SUBSTITUTED")
     try:
         base = bl.load(con, m["baseline_artifact_id"]) if det.spec.needs_baseline else None
     except Exception as e:  # noqa: BLE001

@@ -10,9 +10,9 @@ import numpy as np
 import pytest
 from affine import Affine
 
-from terrawatch import adapters, artifacts, db, geo, worker
-from terrawatch.adapters import SceneRef
-from terrawatch.recipes import REGISTRY as RECIPES
+from snitch import adapters, artifacts, db, geo, worker
+from snitch.adapters import SceneRef
+from snitch.recipes import REGISTRY as RECIPES
 
 AOI = {"type": "Polygon", "coordinates": [[[0.0, 0.0], [0.02, 0.0], [0.02, 0.02],
                                            [0.0, 0.02], [0.0, 0.0]]]}
@@ -80,13 +80,13 @@ class FakeAdapter:
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    monkeypatch.setenv("TW_DATA_DIR", str(tmp_path))
-    from terrawatch import config
+    monkeypatch.setenv("SNITCH_DATA_DIR", str(tmp_path))
+    from snitch import config
     config.config.cache_clear()
     fake = FakeAdapter()
     monkeypatch.setattr(adapters, "first_healthy", lambda prefs, sensor=None: fake)
     monkeypatch.setattr(adapters, "get_adapter", lambda name: fake)
-    from terrawatch import pipeline
+    from snitch import pipeline
     monkeypatch.setattr(pipeline.adapters, "first_healthy", lambda prefs, sensor=None: fake)
     monkeypatch.setattr(pipeline.adapters, "get_adapter", lambda name: fake)
     # Chips render for real: the two-band display_bands crash hid here for months
@@ -121,7 +121,7 @@ def _drain(con, limit=200):
 
 def test_phase_correlation_correction_shifts_all_bands_without_edge_wrap():
     from scipy.ndimage import shift as nd_shift
-    from terrawatch.pipeline import _coregister, _misregistration
+    from snitch.pipeline import _coregister, _misregistration
 
     rng = np.random.default_rng(42)
     reference = rng.normal(size=(64, 64)).astype("float32")
@@ -141,7 +141,7 @@ def test_phase_correlation_correction_shifts_all_bands_without_edge_wrap():
 
 
 def test_saturation_reports_only_widespread_optical_clipping():
-    from terrawatch.pipeline import _saturation
+    from snitch.pipeline import _saturation
 
     data = {"B04": np.full((10, 10), 0.3), "B08": np.full((10, 10), 0.4),
             "VV": np.full((10, 10), 1.0)}
@@ -227,7 +227,7 @@ def test_a_clouded_month_is_loud_and_produces_no_alert(env):
 
 def test_evidence_bundle_is_self_contained(env):
     con, fake, pipeline = env
-    from terrawatch.export import build
+    from snitch.export import build
     p = _project(con)
     fake.event_date = "2025-06-01"
     db.enqueue(con, "baseline", {"project_id": p["id"], "before": "2025-01-01"}, p["id"])

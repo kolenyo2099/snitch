@@ -22,6 +22,12 @@ ENDPOINTS = {
 
 SAR_COLLECTIONS = {"sentinel-1-rtc", "sentinel-1-grd"}
 
+#: Default ceiling on one analysis grid. AOI size is otherwise only warned about
+#: (a large backtest is slow, not wrong), but past this point slow becomes an
+#: out-of-memory crash that takes the worker down. Overridable per installation
+#: with adapters.max_pixels. 50 Mpx ≈ 5,000 km² at 10 m.
+MAX_GRID_PIXELS = 50_000_000
+
 
 def sensor_of(name: str) -> str:
     """S1 or S2, from the adapter's default collection."""
@@ -154,6 +160,16 @@ class StacAdapter:
         minx, miny, maxx, maxy = analysis_geom.bounds
         width = max(1, int(np.ceil((maxx - minx) / res)))
         height = max(1, int(np.ceil((maxy - miny) / res)))
+        from . import config as _config
+        cap = int(_config.get("adapters.max_pixels", MAX_GRID_PIXELS))
+        if width * height > cap:
+            km2 = width * height * res * res / 1e6
+            raise ValueError(
+                f"This area is {width * height:,} pixels on the {res:g} m analysis "
+                f"grid (≈{km2:,.0f} km²), past the {cap:,}-pixel ceiling. That is not "
+                "a big job, it is an out-of-memory crash: split the area into "
+                "smaller projects (adapters.max_pixels raises the ceiling if you "
+                "really mean it).")
         transform = from_origin(minx, maxy, res, res)
         xs = minx + (np.arange(width) + 0.5) * res
         ys = maxy - (np.arange(height) + 0.5) * res

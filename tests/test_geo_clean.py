@@ -1,7 +1,7 @@
 """The duplicate-vertex case that made Earth Search answer 400 on hand-drawn shapes."""
 import pytest
 
-from terrawatch import db, geo
+from snitch import db, geo
 
 
 def test_duplicate_vertex_is_dropped():

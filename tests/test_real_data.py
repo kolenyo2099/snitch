@@ -9,11 +9,11 @@ from datetime import datetime, timedelta, timezone
 import numpy as np
 import pytest
 
-from terrawatch import adapters
+from snitch import adapters
 
 pytestmark = pytest.mark.skipif(
-    os.environ.get("TERRAWATCH_LIVE") != "1",
-    reason="live network test; set TERRAWATCH_LIVE=1 to run")
+    os.environ.get("SNITCH_LIVE") != "1",
+    reason="live network test; set SNITCH_LIVE=1 to run")
 
 # ~2 km box over Rondônia — cloud-light, covered by every S2 orbit.
 AOI = {"type": "Polygon", "coordinates": [[

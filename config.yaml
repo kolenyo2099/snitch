@@ -15,6 +15,9 @@ adapters:
     # so there is no credential to configure.
     enabled: true
     collection: sentinel-1-rtc
+  # Hard ceiling on one analysis grid, in pixels (~5,000 km² at 10 m). Larger areas
+  # are refused with an explanation rather than exhausting worker memory.
+  max_pixels: 50000000
   gee:
     enabled: false
     service_account_json: null
@@ -51,3 +54,7 @@ notifications:
 
 ui:
   password: null
+  # On a desk: leave true, and the browser needs no password. On a server set
+  # false — a reverse proxy arrives from loopback too, so trusting it would
+  # bypass the password entirely.
+  trust_local: true

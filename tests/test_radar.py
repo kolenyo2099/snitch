@@ -4,8 +4,8 @@ come out uniform on data where nothing changed."""
 import numpy as np
 import pytest
 
-from terrawatch import masks
-from terrawatch.detectors import REGISTRY, S1RatioFlood, WishartOmnibus, _otsu
+from snitch import masks
+from snitch.detectors import REGISTRY, S1RatioFlood, WishartOmnibus, _otsu
 
 ENL = 4.4
 RNG = np.random.default_rng(20260822)
@@ -136,7 +136,7 @@ def test_unavailable_masks_are_reported_as_none_not_as_zero():
 def test_slope_mask_excludes_steep_ground(monkeypatch):
     slope = np.zeros((8, 8), "float32")
     slope[:3] = 20.0
-    monkeypatch.setattr("terrawatch.dem.slope_deg", lambda *a, **k: slope)
+    monkeypatch.setattr("snitch.dem.slope_deg", lambda *a, **k: slope)
     data = {"VV": np.ones((8, 8), "float32"),
             "_crs": "EPSG:32721", "_transform": object()}
     m = masks.slope(data, {"_aoi": {"type": "Point", "coordinates": [0, 0]},
@@ -145,7 +145,7 @@ def test_slope_mask_excludes_steep_ground(monkeypatch):
 
 
 def test_orbit_rule_rejects_every_path_not_just_polling():
-    from terrawatch.pipeline import _orbit_reason
+    from snitch.pipeline import _orbit_reason
 
     project = {"s1_relative_orbit": 10, "s1_pass_direction": "DESCENDING"}
     recipe = {"sensor": "S1"}
@@ -160,7 +160,7 @@ def test_orbit_rule_rejects_every_path_not_just_polling():
 
 @pytest.mark.parametrize("rid", ["flood_radar", "site_activity_radar"])
 def test_radar_recipes_resolve_to_a_registered_detector(rid):
-    from terrawatch.recipes import REGISTRY as RECIPES
+    from snitch.recipes import REGISTRY as RECIPES
 
     r = RECIPES[rid]
     det = REGISTRY[r["detector"]]

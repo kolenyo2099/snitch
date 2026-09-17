@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json, os, smtplib, subprocess
 from email.message import EmailMessage
+from urllib.parse import quote
 
 import httpx
 
@@ -52,7 +53,10 @@ def _slack(p, cfg):
 @channel("matrix")
 def _matrix(p, cfg):
     token = os.environ.get(cfg.get("token_env", "MATRIX_TOKEN"), "")
-    httpx.post(f"{cfg['homeserver']}/_matrix/client/v3/rooms/{cfg['room_id']}"
+    # The room id lands in the URL path; left raw, a "?", "#" or "/" inside it
+    # would rewrite the request target.
+    room = quote(cfg["room_id"], safe="")
+    httpx.post(f"{cfg['homeserver']}/_matrix/client/v3/rooms/{room}"
                "/send/m.room.message",
                headers={"Authorization": f"Bearer {token}"},
                json={"msgtype": "m.text", "body": _text(p)}, timeout=20
@@ -62,10 +66,12 @@ def _matrix(p, cfg):
 @channel("email")
 def _email(p, cfg):
     msg = EmailMessage()
-    msg["Subject"] = f"TerraWatch {p['severity']}: {p['project']} {p['sensed_at'][:10]}"
+    msg["Subject"] = f"Snitch {p['severity']}: {p['project']} {p['sensed_at'][:10]}"
     msg["From"], msg["To"] = cfg["from"], ", ".join(cfg["to"])
     msg.set_content(_text(p))
-    with smtplib.SMTP(cfg["smtp_host"], cfg.get("smtp_port", 587)) as s:
+    # Without a timeout a hung SMTP server parks the single worker thread forever —
+    # the one outbound call in the package that smtplib does not bound by default.
+    with smtplib.SMTP(cfg["smtp_host"], cfg.get("smtp_port", 587), timeout=30) as s:
         if os.environ.get("SMTP_PASSWORD"):
             s.starttls()
             s.login(cfg["from"], os.environ["SMTP_PASSWORD"])
@@ -74,9 +80,12 @@ def _email(p, cfg):
 
 @channel("desktop")
 def _desktop(p, cfg):
-    body = _text(p).replace('"', "'")
-    subprocess.run(["osascript", "-e",
-                    f'display notification "{body[:200]}" with title "TerraWatch"'],
+    # The body is passed as an argument, never interpolated into the AppleScript
+    # source: alert text is data, and a trailing backslash inside an interpolated
+    # string literal can re-quote the script — up to `do shell script`.
+    subprocess.run(["osascript", "-e", "on run argv",
+                    "-e", 'display notification (item 1 of argv) with title "Snitch"',
+                    "-e", "end run", "--", _text(p)[:200]],
                    check=False)
 
 

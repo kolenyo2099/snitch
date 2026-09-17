@@ -42,6 +42,16 @@ def start() -> BackgroundScheduler:
     return _sched
 
 
+def shutdown():
+    """Stop the scheduler thread and release its jobstore connection so the process
+    can exit (and free the port) instead of lingering after uvicorn stops serving."""
+    global _sched
+    if _sched:
+        _sched.shutdown(wait=False)
+        _sched = None
+        log.info("scheduler stopped")
+
+
 def schedule(project_id: int, project_uuid: str, cron: str):
     start().add_job(_enqueue_poll, CronTrigger.from_crontab(cron),
                     args=[project_id], id=f"poll:{project_uuid}",

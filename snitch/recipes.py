@@ -36,7 +36,7 @@ REGISTRY = load()
 
 def verify_references(timeout: float = 20.0) -> dict:
     """Build-time check (spec §19): a citation that does not resolve is worse than no
-    citation. Run via `python -m terrawatch.recipes`; non-zero exit fails the build."""
+    citation. Run via `python -m snitch.recipes`; non-zero exit fails the build."""
     import httpx
     out = {}
     with httpx.Client(timeout=timeout, follow_redirects=True) as c:

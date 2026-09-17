@@ -46,6 +46,10 @@ export default function Wizard() {
   const toggleRecipe = (id: string) =>
     setRecipeIds((cur) => cur.includes(id) ? cur.filter((r) => r !== id) : [...cur, id]);
   const [orbit, setOrbit] = useState<any>(null);
+  // A recipe may declare a default of null for something only the user knows — the
+  // PWTT conflict start date. Those become required inputs here rather than a project
+  // that fails every run it schedules.
+  const [extraParams, setExtraParams] = useState<Record<string, string>>({});
 
   const [uuid, setUuid] = useState<string>();
   const [methId, setMethId] = useState<number>();
@@ -64,10 +68,16 @@ export default function Wizard() {
     [placeName, recipe?.display_name].filter(Boolean).join(" — ")
     || (preview ? `${preview.area_km2.toFixed(0)} km2 monitor` : "Untitled monitor");
 
-  useEffect(() => { api.recipes().then(setRecipes); api.detectors().then(setDetectors); }, []);
+  useEffect(() => {
+    api.recipes().then(setRecipes).catch((e) => setErr(`Could not load recipes: ${e.message}`));
+    api.detectors().then(setDetectors).catch(() => { /* detectors only feed hints */ });
+  }, []);
   const recipe = recipes.find((r) => r.id === recipeId);
   const chosen = recipeIds.map((id) => recipes.find((r) => r.id === id)!).filter(Boolean);
   const spec = detectors.find((d) => d.id === recipe?.detector);
+  const requiredParams = [...new Set(chosen.flatMap(
+    (r) => Object.entries(r.defaults).filter(([, v]) => v === null).map(([k]) => k)))];
+  const missingParams = requiredParams.filter((k) => !extraParams[k]);
   const needsRadarOrbit = chosen.some(
     (r) => r.sensor === "S1" || r.secondary_sensor === "S1");
   const mixesSensors = new Set(chosen.map((r) => r.sensor)).size > 1;
@@ -106,6 +116,7 @@ export default function Wizard() {
         name: name.trim() || fallbackName(), aoi_geojson: aoi, recipe_ids: recipeIds,
         s1_relative_orbit: orbit?.relative_orbit ?? null,
         s1_pass_direction: orbit?.pass_direction ?? null,
+        ...(requiredParams.length ? { params: extraParams } : {}),
         // a mixed-sensor project needs a source list that can serve both
         ...(mixesSensors
           ? { adapter_preference: ["cdse", "earthsearch", "planetary"] } : {}),
@@ -126,7 +137,10 @@ export default function Wizard() {
   useEffect(() => {
     if (!uuid || !backtesting) return;
     const t = setInterval(async () => {
-      const b = await api.backtest(uuid, methId);
+      let b: any;
+      try {
+        b = await api.backtest(uuid, methId);
+      } catch { return; }   // a dropped poll must not kill calibration tracking
       setRuns(b.runs || []);
       // The newest scored raster stands in for "the calibration": recording it with
       // the threshold is what makes method.md's provenance section truthful.
@@ -207,10 +221,16 @@ export default function Wizard() {
               <span className="chip settled" title="This shape has been fully checked.">
                 ✓ coverage checked
               </span>
-              {preview.slow_warning && (
+              {preview.slow_warning && !preview.over_pixel_cap && (
                 <div className="warn-box" style={{ margin: "8px 0" }}>
                   Above 500 km². Runs over this area will be slow and each one downloads
                   more data. Consider splitting it into smaller monitors.
+                </div>
+              )}
+              {preview.over_pixel_cap && (
+                <div className="err-box" role="alert" style={{ margin: "8px 0" }}>
+                  This area is past the installation's pixel ceiling. It cannot be
+                  analysed as one grid — split it into smaller monitors.
                 </div>
               )}
               <table style={{ marginTop: 8 }}>
@@ -351,6 +371,32 @@ export default function Wizard() {
             </div>
           )}
 
+          {requiredParams.length > 0 && (
+            <div className="panel">
+              <b>Dates this method needs</b>
+              <p className="tiny muted" style={{ marginTop: 6 }}>
+                There is no sensible default for these, so the method cannot run until
+                you give them. You can change them later and re-analyse.
+              </p>
+              {requiredParams.map((key) => (
+                <label key={key} className="row" style={{ gap: 8, marginTop: 8 }}>
+                  <span style={{ minWidth: 160 }}>
+                    {key === "war_start" ? "Conflict start date" : key}
+                  </span>
+                  <input type="date" value={extraParams[key] || ""}
+                         onChange={(e) => setExtraParams(
+                           (cur) => ({ ...cur, [key]: e.target.value }))} />
+                  {key === "war_start" && (
+                    <span className="tiny muted">
+                      Imagery from the twelve months before this date is the
+                      pre-conflict reference.
+                    </span>
+                  )}
+                </label>
+              ))}
+            </div>
+          )}
+
           {recipe && (
             <div className="panel">
               <b>What this method cannot do</b>
@@ -361,17 +407,22 @@ export default function Wizard() {
           <div className="row">
             <button onClick={() => setStep(0)}>Back</button>
             <button className="primary" disabled={!recipeIds.length || busy ||
-                       (needsRadarOrbit && !orbit)}
+                       (needsRadarOrbit && !orbit) || missingParams.length > 0}
                     title={!recipeIds.length ? "Pick at least one question"
-                      : needsRadarOrbit && !orbit ? "Pick a radar orbit" : undefined}
+                      : needsRadarOrbit && !orbit ? "Pick a radar orbit"
+                      : missingParams.length ? `Fill in ${missingParams.join(", ")}`
+                      : undefined}
                     onClick={beginCalibration}>
               {busy ? "Creating the monitor…" : "Next: calibrate on this site's history"}
             </button>
-            {!busy && (!recipeIds.length || (needsRadarOrbit && !orbit)) && (
+            {!busy && (!recipeIds.length || (needsRadarOrbit && !orbit)
+                       || missingParams.length > 0) && (
               <span className="tiny muted">
                 {!recipeIds.length
                   ? "Pick at least one question above to continue."
-                  : "Pick one radar orbit above to continue — the radar method needs it."}
+                  : needsRadarOrbit && !orbit
+                    ? "Pick one radar orbit above to continue — the radar method needs it."
+                    : `Fill in ${missingParams.join(", ")} above to continue.`}
               </span>
             )}
           </div>

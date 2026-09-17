@@ -1,5 +1,6 @@
 """Content-addressed artifact store. Immutable once written."""
 import hashlib, json, os, shutil, tempfile
+from datetime import datetime, timedelta, timezone
 
 import numpy as np
 
@@ -123,8 +124,26 @@ def gc(con, dry_run: bool = True) -> dict:
                 refs |= {int(v) for v in aux.get(key, {}).values() if v}
         except (TypeError, ValueError, json.JSONDecodeError):
             pass
+    # GEE sidecars are recorded only inside params_json — no column of any table
+    # points at them, so without this sweep pass every fitted baseline's sidecar
+    # looks like an orphan.
+    for row in con.execute("SELECT params_json FROM project_methodology"
+                           " UNION ALL SELECT params_json FROM project"):
+        try:
+            sid = (json.loads(row["params_json"]) or {}).get(
+                "_gee_sidecar_artifact_id")
+            if sid:
+                refs.add(int(sid))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            pass
+    # Writing an artifact and the row that references it are not atomic: chips land
+    # in the store while the 45 s VLM call runs, before the alert row exists. Give
+    # that window a wide berth rather than deleting work in progress.
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(
+        timespec="seconds")
     orphans = [(r["id"], path_for(r["sha256"]), r["bytes"]) for r in
-               con.execute("SELECT id, sha256, bytes FROM artifact")
+               con.execute("SELECT id, sha256, bytes FROM artifact"
+                           " WHERE created_at < ?", (cutoff,))
                if r["id"] not in refs]
     if not dry_run:
         for aid, p, _ in orphans:

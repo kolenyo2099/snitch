@@ -55,17 +55,34 @@ export default function ProjectDetail() {
   // units — a blended timeline plots incompatible quantities on one axis.
   const [methSel, setMethSel] = useState<number | "">("");
 
+  // Follow the keyset cursor instead of silently rendering page one forever —
+  // bounded at 500 so a project with fifty thousand alerts cannot stall the page.
+  const allPages = async (
+    fetchPage: (cursor?: number) => Promise<{ items: any[]; next_cursor: number | null }>,
+  ) => {
+    let out: any[] = [], cursor: number | null | undefined, pages = 0;
+    do {
+      const r = await fetchPage(cursor ?? undefined);
+      out = out.concat(r.items);
+      cursor = r.next_cursor;
+      pages += 1;
+    } while (cursor && pages < 5);
+    return out;
+  };
+
   const state = useApi<Bundle>(async () => {
     const p = await api.project(uuid);
     const [allRecipes, detectors, obs, runs, alerts, incidents, h] = await Promise.all([
       api.recipes(), api.detectors(), api.observations(uuid), api.runs(uuid),
-      api.alerts(uuid), api.incidents(uuid), api.projectHealth(uuid),
+      allPages((c) => api.alertsPage(uuid, c)),
+      allPages((c) => api.incidentsPage(uuid, c)),
+      api.projectHealth(uuid),
     ]);
     return {
       p, allRecipes, detectors,
       recipe: allRecipes.find((r: Recipe) => r.id === p.recipe_id),
-      obs: obs.items, runs: runs.items, alerts: alerts.items,
-      incidents: incidents.items, h,
+      obs: obs.items, runs: runs.items, alerts,
+      incidents, h,
     };
   }, [uuid]);
 

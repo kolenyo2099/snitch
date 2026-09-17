@@ -855,7 +855,104 @@ class WishartOmnibus:
         return DetectorResult(p_value, valid, None, aux, notes)
 
 
+class PwttDamage:
+    """R9. Pixel-Wise T-Test battle-damage detection (Ballinger 2025).
+
+    Unlike every other detector here this one is not pure array code: the statistic is
+    defined on Earth Engine's own `S1_GRD_FLOAT` preprocessing and on Dynamic World,
+    so it is computed server-side by the published `pwtt` package and only the
+    finished raster is brought back to the analysis grid. Reimplementing it on local
+    RTC arrays would change the numbers, which is precisely what must not happen to a
+    method whose value is that it is the published one. The Earth Engine call lives in
+    `snitch.pwtt`; this class only frames it as a detector.
+
+    The two-period test is unchanged. It is evaluated once per new acquisition with
+    the post-event window *ending* on that acquisition, so a forward run never reads
+    imagery it could not have seen.
+    """
+
+    spec = DetectorSpec(
+        id="pwtt_damage", version="1.0",
+        display_name="Battle damage (Pixel-Wise T-Test)", sensor="S1",
+        required_bands=["VV", "VH"],
+        # The reference period is a date window evaluated inside Earth Engine, not a
+        # fitted baseline artifact, so no baseline job runs for this method.
+        needs_baseline=False, min_baseline_observations=0,
+        score_units="t_statistic", score_polarity="higher_is_more_change",
+        default_threshold=3.3,
+        threshold_semantics=("Multi-scale two-sample t statistic on log Sentinel-1 "
+                             "backscatter, pre-conflict period versus the two months "
+                             "ending on this acquisition. The published cut is 3; the "
+                             "reference application ships 3.3."),
+        reference={"citation": ("Ballinger, O. (2025). The Pixelwise T-Test: a new "
+                                "algorithm for battle damage detection using "
+                                "Sentinel-1 imagery. Remote Sensing of Environment."),
+                   "url": "https://www.sciencedirect.com/science/article/pii/S0034425725004298"},
+        param_schema={"war_start": {"type": "string", "default": None},
+                      "pre_interval": {"type": "number", "default": 12.0},
+                      "post_interval": {"type": "number", "default": 2.0},
+                      "threshold": {"type": "number", "default": 3.3}},
+    )
+
+    def score(self, day: float, target: dict, baseline: dict | None,
+              params: dict) -> DetectorResult:
+        from datetime import datetime
+
+        from . import pwtt
+
+        aoi, sensed_at = params.get("_aoi"), params.get("_sensed_at")
+        if not aoi or not sensed_at:
+            raise ValueError("the PWTT detector needs the AOI and the acquisition "
+                             "date; it is driven by the pipeline, not called directly")
+        if not params.get("war_start"):
+            raise ValueError(
+                "This method needs a conflict start date. Set the `war_start` "
+                "parameter on the methodology (the date the pre-conflict reference "
+                "period ends).")
+        settings = pwtt._params({k: params.get(k) for k in
+                                 ("pre_interval", "post_interval", "threshold")})
+        settings["war_start"] = str(params["war_start"])[:10]
+        settings["inference_start"] = pwtt.window_for(sensed_at, settings)
+
+        shape = next(v.shape for k, v in target.items() if not k.startswith("_"))
+        war = datetime.fromisoformat(settings["war_start"])
+        if datetime.fromisoformat(settings["inference_start"]) < war:
+            # The post-event window would reach back across the conflict start and
+            # compare the reference period against itself. Saying so beats a score.
+            return DetectorResult(
+                np.full(shape, np.nan, "float32"), np.zeros(shape, bool), None,
+                {"inference_start": settings["inference_start"],
+                 "war_start": settings["war_start"]},
+                [f"The two-month window ending on {sensed_at[:10]} starts before the "
+                 f"conflict date {settings['war_start']}, so no damage test is "
+                 "possible for this acquisition."])
+
+        coverage = pwtt.coverage(aoi, settings)
+        score = pwtt.t_statistic_grid(aoi, settings, target["_crs"],
+                                      target["_transform"], shape,
+                                      scale=float(params.get("resolution_m", 10.0)))
+        valid = np.isfinite(score)
+        notes = []
+        floor = int(params.get("min_scenes_per_orbit", 4))
+        if min(coverage["min_pre_scenes_per_orbit"],
+               coverage["min_post_scenes_per_orbit"]) < floor:
+            notes.append(
+                f"BASELINE_TOO_SHORT: the thinnest orbit contributes "
+                f"{coverage['min_pre_scenes_per_orbit']} pre-conflict and "
+                f"{coverage['min_post_scenes_per_orbit']} post-event scenes; the "
+                "normal approximation behind the p-values assumes more.")
+        notes.append("Damage is scored only where Dynamic World reported built-up "
+                     "cover above 0.1 before the conflict; everything outside that "
+                     "mask is unscored, not undamaged.")
+        return DetectorResult(
+            np.where(valid, score, np.nan).astype("float32"), valid, None,
+            {"compute_backend": "gee", "method_windows": settings,
+             "coverage": coverage,
+             "eecu_estimate": pwtt.eecu_estimate(shape, coverage["post_scenes"])},
+            notes)
+
+
 REGISTRY = {d.spec.id: d for d in [
     HarmonicResidual(), RaddProbabilistic(), DNBR(), S1RatioFlood(), MNDWIExtent(),
-    BuiltupDual(), WishartOmnibus(), IrmadCva(),
+    BuiltupDual(), WishartOmnibus(), IrmadCva(), PwttDamage(),
 ]}

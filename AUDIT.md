@@ -1,7 +1,7 @@
-# TerraWatch — Full Application Audit
+# Snitch — Full Application Audit
 
 **Date:** 2026-08-27 · **Scope:** entire repository compared against `BUILD.md` (spec v1.0),
-`README.md`, `recipes/*.yaml`, and the code in `terrawatch/`, `frontend/src/`, `tests/`,
+`README.md`, `recipes/*.yaml`, and the code in `snitch/`, `frontend/src/`, `tests/`,
 and the Docker/deployment files.
 
 **Status:** C1–C3, H1, H2 (scaffolding removed), H4, the §5 doc drift, and §7 priority
@@ -39,7 +39,7 @@ end-to-end test monkeypatches out exactly the code that breaks.
 
 ### C1. The flagship recipe (`vegetation_loss_optical`) can never raise an alert on real data — chip rendering crashes
 
-`chips.display_bands()` (`terrawatch/chips.py:13-23`) returns the intersection of the
+`chips.display_bands()` (`snitch/chips.py:13-23`) returns the intersection of the
 recipe's bands with the RGB triple `(B04, B03, B02)`. For `vegetation_loss_optical`
 (bands `B03, B04, B08, B11, B12, SCL` — no `B02`) it returns **two** bands:
 
@@ -52,7 +52,7 @@ together with shapes (100,2) (3,)
 (the overlay tint `ov[m] = 0.45*ov[m] + 0.55*[255,60,60]` cannot broadcast over 2
 channels; `Image.fromarray` would also reject an (h, w, 2) frame).
 
-`chips.render` is called from `_render_chips` (`terrawatch/pipeline.py:793-824`), which
+`chips.render` is called from `_render_chips` (`snitch/pipeline.py:793-824`), which
 is on the mandatory path of:
 
 - **stage 11** for every forward alert — the exception propagates *before* the alert
@@ -71,7 +71,7 @@ that renders chips for every recipe.
 
 ### C2. Duplicate observation writes get a **stale** row id — corrupts run↔observation links
 
-`_write_observation` (`terrawatch/pipeline.py:149-163`) relies on
+`_write_observation` (`snitch/pipeline.py:149-163`) relies on
 `INSERT OR IGNORE … .lastrowid or con.execute(SELECT …)`. But sqlite3's `lastrowid`
 after an ignored insert is **not** `None` — it is the previous successful insert's id on
 that connection, which is truthy, so the `SELECT` fallback never runs (verified on this
@@ -99,7 +99,7 @@ link matches the scene id.
 
 `run_scene` appends the `PROVENANCE_DISCONTINUITY` caveat when
 `base["meta"].get("adapter")` differs from the serving adapter (`pipeline.py:530-532`).
-But `baseline.save` (`terrawatch/baseline.py:9-25`) **never writes an `adapter` key into
+But `baseline.save` (`snitch/baseline.py:9-25`) **never writes an `adapter` key into
 the baseline metadata** — so the check is always `None` and the caveat can never be
 raised. Spec §4.2: "If a run is served by a different adapter than the baseline was, it
 must be flagged" — and `BUILD.md` marks this `[x] → P2`. The caveat sentence and UI chip
@@ -119,7 +119,7 @@ spec §19: "fail the recipe registry load if a reference is unresolvable". The D
 (`Dockerfile:22-23`) runs:
 
 ```dockerfile
-RUN if [ "$VERIFY_REFERENCES" = "1" ]; then python -m terrawatch.recipes || \
+RUN if [ "$VERIFY_REFERENCES" = "1" ]; then python -m snitch.recipes || \
     echo "WARNING: reference check skipped (no network at build time)"; fi
 ```
 
@@ -211,7 +211,7 @@ one place a user actually calibrates.
 9. **Data-directory resolution is split-brained**: `db.py:7` resolves `./data` against
    the **process CWD at import time**, while `config.data_dir()` (used by logs and the
    artifact store, `log.py:25`, `artifacts.py:10-11`) resolves against the repo root.
-   With `TW_DATA_DIR` unset and a non-root CWD, the database lands in one tree and the
+   With `SNITCH_DATA_DIR` unset and a non-root CWD, the database lands in one tree and the
    artifacts/logs in another.
 
 10. **Export gaps vs spec §15**: `sources.json` records STAC items and URIs but **no

@@ -1,4 +1,4 @@
-# TerraWatch — Build Specification & Progress Tracker
+# Snitch — Build Specification & Progress Tracker
 
 **Spec version 1.0** · This document is the single source of truth. It preserves the
 complete original build specification and adds phased delivery plus per-item progress
@@ -157,9 +157,9 @@ BUILD.md                  this document
 config.yaml               single config file, env-overridable
 docker-compose.yml        api + worker + tiler
 recipes/*.yaml            the recipe catalogue, one file per recipe
-terrawatch/
+snitch/
   db.py                   schema, connection, job queue, diagnostics
-  config.py               config.yaml loader with TW_SECTION__KEY env overrides
+  config.py               config.yaml loader with SNITCH_SECTION__KEY env overrides
   log.py                  structured JSON logging with rotation
   geo.py                  AOI helpers: cleaning, area, analysis CRS, cron suggestion
   adapters.py             STAC source adapters
@@ -191,7 +191,7 @@ tests/                    unit, golden fixture, and property tests
 # PART II — THE SPECIFICATION
 
 A self-hosted satellite change monitoring application. The user draws an area on a map,
-chooses what kind of change they care about, and TerraWatch watches that area for as
+chooses what kind of change they care about, and Snitch watches that area for as
 long as they want it watched, raising explained alerts on a dashboard whenever new
 Sentinel-1 or Sentinel-2 imagery shows a change that crosses their threshold.
 
@@ -231,7 +231,7 @@ list.
 - InSAR coherence as a detector. SLC pair processing does not belong inside a monitoring
   loop.
 - Mobile-native clients. The web UI should be responsive but is designed for desktop.
-- Automated attribution of cause. TerraWatch reports what changed, never who did it or
+- Automated attribution of cause. Snitch reports what changed, never who did it or
   why.
 
 ---
@@ -258,8 +258,8 @@ SQLite with `SELECT ... FOR UPDATE`-equivalent semantics implemented via an atom
 `UPDATE ... WHERE status='queued' AND id=(SELECT id ...) RETURNING`. SQLite runs in WAL
 mode with `busy_timeout=10000`.
 
-- [x] Atomic `UPDATE ... RETURNING` job leasing → P0 · `terrawatch/db.py:lease`
-- [x] WAL mode + `busy_timeout=10000` → P0 · `terrawatch/db.py:connect`
+- [x] Atomic `UPDATE ... RETURNING` job leasing → P0 · `snitch/db.py:lease`
+- [x] WAL mode + `busy_timeout=10000` → P0 · `snitch/db.py:connect`
 - [x] No Celery/Redis/RabbitMQ/Postgres (verify at review time) → P0
 
 The scheduler is APScheduler running in the `api` process, with jobs persisted to the
@@ -273,14 +273,14 @@ computes.
 
 ```
 /data
-  terrawatch.db            SQLite, WAL mode
+  snitch.db            SQLite, WAL mode
   /artifacts               content-addressed, sha256 of contents
     /ab/cd/abcd1234....tif
   /projects/<project_id>
     /chips                 rendered PNG/JPEG previews for the UI
     /exports               generated evidence bundles
   /logs
-    terrawatch.jsonl       structured JSON logs, rotated
+    snitch.jsonl       structured JSON logs, rotated
 ```
 
 - [x] Content-addressed artifact store, sha256 fan-out directories → P1
@@ -343,7 +343,7 @@ class SourceAdapter(Protocol):
 collection, relative orbit number, orbit direction (for S1), a stable source URI, and
 the raw STAC item JSON.
 
-- [x] `SceneRef` with all required fields → P1 · `terrawatch/adapters.py`
+- [x] `SceneRef` with all required fields → P1 · `snitch/adapters.py`
 - [x] Adapter protocol: `search` / `load` / `health` → P1 · production `load` returns an
   `xr.Dataset` with `(time, y, x)` dimensions; the pipeline compatibility shim keeps
   synthetic test adapters lightweight
@@ -370,7 +370,7 @@ collection, which is already radiometrically terrain-corrected.
   Planetary Computer RTC rather than mixing uncorrected GRD into the reference path
 - [x] `earthsearch` adapter → P1
 - [x] `planetarycomputer` adapter → P7 · Sentinel-1 RTC COGs with anonymous SAS signing
-- [x] `gee` adapter → P10 · `terrawatch/gee.py`, lazily imported
+- [x] `gee` adapter → P10 · `snitch/gee.py`, lazily imported
 
 The project record stores an ordered preference list of adapters. On failure, the worker
 falls through the list and records which adapter served each observation. If a run is
@@ -405,7 +405,7 @@ Do not attempt SNAP-equivalent processing in v1. Rules in order of preference:
   absent.** R7 is invalid on filtered data (the Wishart model describes unfiltered
   multilook statistics) and R4 gains little once the MMU is applied. Filtering would
   quietly break the recipe whose whole value is a defensible p-value
-- [x] GRD path: GLO-30 slope-derived layover/shadow mask → P7 · `terrawatch/dem.py`
+- [x] GRD path: GLO-30 slope-derived layover/shadow mask → P7 · `snitch/dem.py`
   fetches GLO-30 and the `slope` mask excludes steep ground; RTC additionally delivers
   layover and shadow as nodata, which the `nodata` mask already removes
 - [x] Refuse to run and raise a diagnostic when neither is possible → P7 ·
@@ -474,7 +474,7 @@ The file is user-editable so new events can be added without a code change.
 Written as DDL. All timestamps are UTC ISO-8601 strings. All geometry is GeoJSON text.
 Use `INTEGER PRIMARY KEY` rowids plus a public `uuid` column on user-visible entities.
 
-- [x] `project` table → P0 · `terrawatch/db.py`
+- [x] `project` table → P0 · `snitch/db.py`
 - [x] `artifact` table → P0
 - [x] `observation` table → P0
 - [x] `run` table → P0
@@ -486,7 +486,7 @@ Use `INTEGER PRIMARY KEY` rowids plus a public `uuid` column on user-visible ent
       `alert(project_id, sensed_at)`, `diagnostic(project_id, occurred_at)`,
       `job(status, available_at)` → P0
 
-The full DDL is implemented verbatim in [`terrawatch/db.py`](terrawatch/db.py) and is
+The full DDL is implemented verbatim in [`snitch/db.py`](snitch/db.py) and is
 the authoritative copy; the original brief's DDL is reproduced there without change.
 
 ---
@@ -586,7 +586,7 @@ class Detector(Protocol):
 `Baseline` is a serialisable object persisted as a multi-band COG plus a JSON sidecar. It
 must record the observation ids it was fitted from and the fitting date range.
 
-- [x] `DetectorSpec` dataclass → P3 · `terrawatch/detectors.py`
+- [x] `DetectorSpec` dataclass → P3 · `snitch/detectors.py`
 - [x] `DetectorResult` dataclass → P3
 - [x] `Detector` protocol: `fit_baseline` + `score` → P3
 - [x] `Baseline` persisted as multi-band COG + JSON sidecar → P3
@@ -632,7 +632,7 @@ A recipe is what the user actually picks. Each is defined in a YAML file under
 `recipes/` and loaded into a registry at startup. Recipes are versioned; a project pins a
 recipe version so history stays interpretable when recipes are updated.
 
-- [x] YAML recipe files loaded into a registry at startup → P3 · `terrawatch/recipes.py`
+- [x] YAML recipe files loaded into a registry at startup → P3 · `snitch/recipes.py`
 - [x] Recipes are versioned; projects pin a version → P3
 - [x] Reference URLs verified at build time (§19) → P3
 
@@ -983,7 +983,7 @@ a given date.
 
 - [x] `cloudscore_plus` → P2 · preferred whenever a `cs` asset is published
 - [x] `s2cloudless` → P2 · probability fallback with solar-geometry shadow projection
-- [x] `scl_shadow` → P2 · `terrawatch/masks.py`
+- [x] `scl_shadow` → P2 · `snitch/masks.py`
 - [x] `snow` → P2
 - [x] `s1_terrain` → P7 · GLO-30 slope and D8 HAND layers over RTC imagery
 - [x] `s1_border_noise` → P7 · not applicable to the selected RTC collection; GRD
@@ -1033,7 +1033,7 @@ shown in the UI.
 | `SOURCE_UNREACHABLE` | error | All adapters failed | [x] P1 |
 | `RUN_FAILED` | error | Unhandled exception, with traceback in `detail_json` | [x] P3 |
 
-- [x] Diagnostic write helper → P0 · `terrawatch/db.py:diagnostic`
+- [x] Diagnostic write helper → P0 · `snitch/db.py:diagnostic`
 - [x] Every local code has a template message, severity, and suggested remedy → P2 ·
   stable severity/remedy metadata is stored in `detail_json` and rendered on cards;
   the GEE quota codes are raised by the pre-flight budget check in `gee.check_budget`
@@ -1399,7 +1399,7 @@ signed short-lived token issued by the API.
 
 Any alert, run, or whole project can be exported as a zip bundle containing:
 
-- `manifest.json` with schema version, export timestamp, TerraWatch version and git
+- `manifest.json` with schema version, export timestamp, Snitch version and git
   commit, and a sha256 for every file.
 - The source COGs used, or if too large, the STAC item JSON plus the exact source URIs
   and byte ranges read.
@@ -1535,7 +1535,7 @@ least one artifact.
   size, whether the S1 orbit choice should allow multi-orbit projects with per-orbit
   baselines, and whether incidents should support manual merge and split.
 
-- [x] Reference resolution verified at build time (`python -m terrawatch.recipes`) → P3
+- [x] Reference resolution verified at build time (`python -m snitch.recipes`) → P3
 - [x] Invented defaults marked `provenance: heuristic` → per phase · registry loading
   fails if any default lacks `literature`, `statistical`, or `heuristic` provenance
 - [x] No blended continuous confidence score anywhere → all phases · confidence is only

@@ -24,6 +24,15 @@ def describe(con, chip_ids: dict, deterministic_summary: str) -> str | None:
     ids = [chip_ids.get(k) for k in ("before", "after", "overlay")]
     if not endpoint or not model or not all(ids):
         return None
+    from urllib.parse import urlparse
+    u = urlparse(endpoint)
+    if u.scheme != "https" and (u.hostname or "") not in (
+            "localhost", "127.0.0.1", "::1"):
+        # The bearer key and the site's before/after imagery ride in this request.
+        from .log import log
+        log.warning("vlm endpoint refused", extra={"extra": {
+            "reason": "explanations.vlm_endpoint must be https (localhost excepted)"}})
+        return None
     content = [{"type": "text", "text": (
         "Describe only visually apparent differences that support or qualify this "
         "deterministic satellite-change summary. Do not assign confidence, severity, "
@@ -35,7 +44,7 @@ def describe(con, chip_ids: dict, deterministic_summary: str) -> str | None:
                      "image_url": {"url": _data_url(artifacts.read(con, artifact_id)),
                                    "detail": "low"}}]
     headers = {"content-type": "application/json"}
-    if token := os.environ.get("TW_VLM_API_KEY"):
+    if token := os.environ.get("SNITCH_VLM_API_KEY"):
         headers["authorization"] = f"Bearer {token}"
     with httpx.Client(timeout=45) as client:
         response = client.post(endpoint, headers=headers,

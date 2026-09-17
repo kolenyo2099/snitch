@@ -11,7 +11,7 @@ MAX_SOURCE_COG_BYTES = 200 * 1024 * 1024
 
 
 def _readme_md(scope: str) -> str:
-    return f"""# TerraWatch evidence bundle
+    return f"""# Snitch evidence bundle
 
 This archive is a self-contained record of {scope}. Start with **method.md** for the
 plain-language claim, method, threshold choice, limitations, and citation.
@@ -26,7 +26,7 @@ plain-language claim, method, threshold choice, limitations, and citation.
 - `rasters/` — GeoTIFF score and valid-mask evidence.
 - `chips/` — identically stretched before, after, and overlay previews.
 
-The deterministic explanation is the claim TerraWatch made. Optional machine-generated
+The deterministic explanation is the claim Snitch made. Optional machine-generated
 vision prose is deliberately excluded. Scores retain the units stated in `method.md` and
 must not be interpreted as a universal confidence percentage.
 
@@ -42,7 +42,7 @@ def _version() -> dict:
                                 ).stdout.strip() or None
     except Exception:  # noqa: BLE001
         commit = None
-    return {"terrawatch_version": "1.0", "git_commit": commit}
+    return {"snitch_version": "1.0", "git_commit": commit}
 
 
 def _method_md(project, recipe, run, alert=None) -> str:
@@ -122,57 +122,76 @@ def build(con, *, project_uuid: str | None = None, run_uuid: str | None = None,
     diagnostics = [dict(d) for d in con.execute(
         "SELECT * FROM diagnostic WHERE project_id=? ORDER BY occurred_at", (pid,))]
 
-    files: dict[str, bytes] = {}
-
-    def add(name: str, blob: bytes):
-        files[name] = blob
-
-    add("project.json", json.dumps(dict(project), indent=2).encode())
-    add("runs.json", json.dumps([dict(r) for r in runs], indent=2).encode())
-    add("alerts.json", json.dumps([dict(a) for a in alerts], indent=2).encode())
-    add("observations.json", json.dumps(observations, indent=2).encode())
-    add("diagnostics.json", json.dumps(diagnostics, indent=2).encode())
-    add("recipe.yaml", json.dumps(recipe, indent=2).encode())
-    add("method.md", _method_md(project, recipe, runs[-1] if runs else None,
-                                alert).encode())
-    add("README.md", _readme_md(
-        f"alert {alert_uuid}" if alert_uuid else
-        f"run {run_uuid}" if run_uuid else f"project {project['uuid']}").encode())
-    # source references: STAC items plus exact source URIs (§15)
-    add("sources.json", json.dumps(
-        [{"scene_id": o["scene_id"], "source_uri": o["source_uri"],
-          "adapter": o["adapter"], "stac_item": json.loads(o["stac_item_json"]),
-          "note": "Pixels are read as HTTP range requests from the asset hrefs in the "
-                  "STAC item; whole scenes are never downloaded."}
-         for o in observations], indent=2).encode())
-
-    for r in runs:
-        for col, name in [("score_raster_id", "score"), ("mask_raster_id", "mask")]:
-            if r[col]:
-                add(f"rasters/{r['uuid']}_{name}.tif", artifacts.read(con, r[col]))
-    for a in alerts:
-        for col, name in [("before_chip_id", "before"), ("after_chip_id", "after"),
-                          ("overlay_chip_id", "overlay")]:
-            if a[col]:
-                add(f"chips/{a['uuid']}_{name}.png", artifacts.read(con, a[col]))
-    # §12.2: the VLM explanation is not exported by default.
-
-    manifest = {"schema_version": SCHEMA_VERSION, "exported_at": db.now(),
-                **_version(),
-                "scope": {"project": project["uuid"], "run": run_uuid,
-                          "alert": alert_uuid},
-                "files": {n: {"sha256": hashlib.sha256(b).hexdigest(), "bytes": len(b)}
-                          for n, b in sorted(files.items())},
-                "readme": "This bundle is self-contained. Start with method.md."}
-    files["manifest.json"] = json.dumps(manifest, indent=2).encode()
-
+    # Small text entries are written straight into the archive; rasters and chips
+    # stream from the artifact store a megabyte at a time, so a project with a
+    # hundred score rasters never holds more than one chunk per file in memory.
     out_dir = os.path.join(config.data_dir(), "projects", str(project["id"]), "exports")
     os.makedirs(out_dir, exist_ok=True)
     stem = alert_uuid or run_uuid or project["uuid"]
-    path = os.path.join(out_dir, f"terrawatch_{stem}.zip")
+    path = os.path.join(out_dir, f"snitch_{stem}.zip")
+    manifest_files: dict[str, dict] = {}
+    skipped: list[dict] = []
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
-        for name, blob in sorted(files.items()):
+
+        def add(name: str, blob: bytes):
             z.writestr(name, blob)
+            manifest_files[name] = {"sha256": hashlib.sha256(blob).hexdigest(),
+                                    "bytes": len(blob)}
+
+        add("project.json", json.dumps(dict(project), indent=2).encode())
+        add("runs.json", json.dumps([dict(r) for r in runs], indent=2).encode())
+        add("alerts.json", json.dumps([dict(a) for a in alerts], indent=2).encode())
+        add("observations.json", json.dumps(observations, indent=2).encode())
+        add("diagnostics.json", json.dumps(diagnostics, indent=2).encode())
+        add("recipe.yaml", json.dumps(recipe, indent=2).encode())
+        add("method.md", _method_md(project, recipe, runs[-1] if runs else None,
+                                    alert).encode())
+        add("README.md", _readme_md(
+            f"alert {alert_uuid}" if alert_uuid else
+            f"run {run_uuid}" if run_uuid else f"project {project['uuid']}").encode())
+        # source references: STAC items plus exact source URIs (§15)
+        add("sources.json", json.dumps(
+            [{"scene_id": o["scene_id"], "source_uri": o["source_uri"],
+              "adapter": o["adapter"], "stac_item": json.loads(o["stac_item_json"]),
+              "note": "Pixels are read as HTTP range requests from the asset hrefs in the "
+                      "STAC item; whole scenes are never downloaded."}
+             for o in observations], indent=2).encode())
+
+        def add_file(name: str, artifact_id: int):
+            src = artifacts.local_path(con, artifact_id)
+            if not src or not os.path.exists(src):
+                return
+            size = os.path.getsize(src)
+            if size > MAX_SOURCE_COG_BYTES:
+                skipped.append({"name": name, "artifact_id": artifact_id,
+                                "bytes": size})
+                return
+            h = hashlib.sha256()
+            with z.open(name, "w") as dst, open(src, "rb") as f:
+                for chunk in iter(lambda: f.read(1 << 20), b""):
+                    h.update(chunk)
+                    dst.write(chunk)
+            manifest_files[name] = {"sha256": h.hexdigest(), "bytes": size}
+
+        for r in runs:
+            for col, name in [("score_raster_id", "score"), ("mask_raster_id", "mask")]:
+                if r[col]:
+                    add_file(f"rasters/{r['uuid']}_{name}.tif", r[col])
+        for a in alerts:
+            for col, name in [("before_chip_id", "before"), ("after_chip_id", "after"),
+                              ("overlay_chip_id", "overlay")]:
+                if a[col]:
+                    add_file(f"chips/{a['uuid']}_{name}.png", a[col])
+        # §12.2: the VLM explanation is not exported by default.
+
+        manifest = {"schema_version": SCHEMA_VERSION, "exported_at": db.now(),
+                    **_version(),
+                    "scope": {"project": project["uuid"], "run": run_uuid,
+                              "alert": alert_uuid},
+                    "files": {n: manifest_files[n] for n in sorted(manifest_files)},
+                    "skipped_oversize": skipped,
+                    "readme": "This bundle is self-contained. Start with method.md."}
+        add("manifest.json", json.dumps(manifest, indent=2).encode())
     return path
 
 

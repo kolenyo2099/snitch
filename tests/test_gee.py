@@ -13,7 +13,7 @@ import pytest
 import xarray as xr
 from affine import Affine
 
-from terrawatch import config, db, gee
+from snitch import config, db, gee
 
 AOI = {"type": "Polygon", "coordinates": [[[0.0, 0.0], [0.02, 0.0], [0.02, 0.02],
                                            [0.0, 0.02], [0.0, 0.0]]]}
@@ -33,8 +33,8 @@ def con(tmp_path):
 
 @pytest.fixture
 def enabled(monkeypatch):
-    monkeypatch.setenv("TW_ADAPTERS__GEE__ENABLED", "true")
-    monkeypatch.setenv("TW_ADAPTERS__GEE__PROJECT_ID", "tw-test")
+    monkeypatch.setenv("SNITCH_ADAPTERS__GEE__ENABLED", "true")
+    monkeypatch.setenv("SNITCH_ADAPTERS__GEE__PROJECT_ID", "tw-test")
     monkeypatch.setenv("GEE_SERVICE_ACCOUNT_JSON", SA)
     config.config.cache_clear()
     yield
@@ -177,7 +177,7 @@ def test_refuses_above_remaining_budget(con, enabled):
 
 
 def test_quota_low_warns_but_allows(con, enabled, monkeypatch):
-    monkeypatch.setenv("TW_ADAPTERS__GEE__DAILY_EECU_CAP", "1000")
+    monkeypatch.setenv("SNITCH_ADAPTERS__GEE__DAILY_EECU_CAP", "1000")
     config.config.cache_clear()
     gee.record(con, 1, "load", 85.0)
     gee.check_budget(con, 1.0, project_id=1)
@@ -222,7 +222,7 @@ def test_load_matches_the_local_convention(con, enabled, monkeypatch):
     # reflectance is rescaled, Cloud Score+ is not
     assert float(ds["B04"].max()) < 1.0 and float(ds["cs"].max()) == pytest.approx(0.9)
     # the same normaliser the local adapter feeds detectors with
-    from terrawatch.adapters import as_array_dict
+    from snitch.adapters import as_array_dict
     arrays = as_array_dict(ds)
     assert set(arrays) >= {"B04", "cs", "_crs", "_transform"}
     prov = ds.attrs["gee"]
@@ -233,8 +233,8 @@ def test_load_matches_the_local_convention(con, enabled, monkeypatch):
 
 def test_substantial_work_uses_batch_export_not_download(con, enabled, monkeypatch):
     _fake_ee(monkeypatch)
-    monkeypatch.setenv("TW_ADAPTERS__GEE__BATCH_EXPORT_EECU", "0.0")
-    monkeypatch.setenv("TW_ADAPTERS__GEE__EXPORT_BUCKET", "tw-bucket")
+    monkeypatch.setenv("SNITCH_ADAPTERS__GEE__BATCH_EXPORT_EECU", "0.0")
+    monkeypatch.setenv("SNITCH_ADAPTERS__GEE__EXPORT_BUCKET", "tw-bucket")
     config.config.cache_clear()
     _Task.started.clear()
     monkeypatch.setattr(xr, "open_dataset", lambda *a, **k: xr.Dataset(
@@ -251,7 +251,7 @@ def test_substantial_work_uses_batch_export_not_download(con, enabled, monkeypat
 
 def test_batch_export_without_a_bucket_refuses(con, enabled, monkeypatch):
     _fake_ee(monkeypatch)
-    monkeypatch.setenv("TW_ADAPTERS__GEE__BATCH_EXPORT_EECU", "0.0")
+    monkeypatch.setenv("SNITCH_ADAPTERS__GEE__BATCH_EXPORT_EECU", "0.0")
     config.config.cache_clear()
     a = gee.GeeAdapter(con, 1)
     scenes = a.search(AOI, datetime(2024, 1, 1, tzinfo=timezone.utc),

@@ -1,6 +1,6 @@
 import numpy as np
 
-from terrawatch.dem import hand_from_elevation
+from snitch.dem import hand_from_elevation
 
 
 def test_hand_routes_downhill_and_is_zero_on_drainage():

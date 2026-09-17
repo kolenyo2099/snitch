@@ -1,5 +1,5 @@
 {
-  "name": "terrawatch-frontend",
+  "name": "snitch-frontend",
   "private": true,
   "type": "module",
   "scripts": {

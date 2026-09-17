@@ -14,10 +14,18 @@ shapely>=2.0
 pyproj>=3.6
 pillow>=10
 python-multipart>=0.0.9
-pytest>=8
+
+# Test-only dependencies live in requirements-dev.txt; the Docker image installs
+# this file and should not ship a test framework.
 
 # Optional GEE backend (spec §11.2). Not installed by default: the local path never
 # imports these, and every project works without them.
 #   earthengine-api>=1.4
 #   xee>=0.0.20
 #   rioxarray>=0.17
+
+# Optional PWTT lane (snitch/pwtt.py). The reference implementation is called
+# unchanged rather than reimplemented, so it is pinned to the version the numbers
+# were verified against.
+#   pwtt==0.1.0
+#   earthengine-api>=1.4

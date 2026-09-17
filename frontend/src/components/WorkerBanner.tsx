@@ -14,9 +14,12 @@ export function WorkerBanner() {
   const { data, error, loading, reload } = useApi<any>(() => api.health(), []);
 
   // Re-check periodically so the banner clears itself once the API is back, rather
-  // than accusing a working server of being down until the user reloads.
+  // than accusing a working server of being down until the user reloads. A hidden
+  // tab neither needs the answer nor should it keep the radio busy.
   useEffect(() => {
-    const t = setInterval(reload, 15000);
+    const t = setInterval(() => {
+      if (document.visibilityState === "visible") reload();
+    }, 15000);
     return () => clearInterval(t);
   }, [reload]);
 
@@ -26,7 +29,7 @@ export function WorkerBanner() {
   if (error)
     return (
       <div className="err-box" role="alert" style={{ marginBottom: 14 }}>
-        <b>Not connected to the TerraWatch API.</b>{" "}
+        <b>Not connected to the Snitch API.</b>{" "}
         <span className="tiny">
           Everything below is stale or empty because the request failed — it is not a
           report about your monitors. ({error})

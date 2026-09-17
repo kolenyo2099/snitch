@@ -21,11 +21,24 @@ V1 = "/api/v1"
 async def lifespan(_app):
     db.connect().close()
     scheduler.start()
+    if not config.get("ui.password"):
+        if not config.get("ui.trust_local", True):
+            log.warning("ui.password is not set and ui.trust_local is false: every "
+                        "API caller, including this machine's own browser, will be "
+                        "refused. Set a password.")
+        else:
+            log.info("no ui.password set: the API answers loopback callers only "
+                     "(fine on a desk; set a password before putting this on a "
+                     "network)")
     log.info("api started", extra={"extra": {"recipes": sorted(RECIPES)}})
-    yield
+    try:
+        yield
+    finally:
+        scheduler.shutdown()
+        log.info("api stopped")
 
 
-app = FastAPI(title="TerraWatch", version="1.0", lifespan=lifespan)
+app = FastAPI(title="Snitch", version="1.0", lifespan=lifespan)
 
 
 def con():
@@ -36,17 +49,102 @@ def con():
         c.close()
 
 
-# --- auth (single optional shared password, spec §2) -----------------------
+# --- auth (shared password; loopback is trusted so local use needs no setup) --
+#
+# One credential model that covers both ways this app runs:
+#   * on a desk (laptop/mini): no password configured — the API answers only
+#     loopback, so local use is frictionless and nothing is exposed;
+#   * on a server: a password is configured and ui.trust_local is false — every
+#     caller must present it, and it rides a cookie too so <img>, the map overlay
+#     and evidence-export links (which cannot send custom headers) keep working.
+# Behind a reverse proxy the request arrives from 127.0.0.1, which is exactly why
+# server deployments run with ui.trust_local: false (compose sets it).
+
+import hmac as _hmac
+import time as _time
+
+_SESSION_COOKIE = "snitch_session"
+_LOOPBACK = {"127.0.0.1", "::1", "testclient"}
+
+# Failed logins per client, for a small linear backoff. In-memory by design: the
+# API is one process, and this is a nuisance throttle, not a bank.
+_login_failures: dict[str, list[float]] = {}
+_LOGIN_WINDOW_S, _LOGIN_MAX_ATTEMPTS, _LOGIN_LOCKOUT_S = 600, 5, 60
+
+
+def _session_token(pw: str) -> str:
+    # Derived, not the password itself: a leaked cookie is worthless after the
+    # password changes, and the password never leaves the server.
+    return _hmac.new(pw.encode(), b"snitch-session-v1", "sha256").hexdigest()
+
+
+def _client_key(request: Request) -> str:
+    return request.client.host if request.client else "?"
+
+
+def _is_loopback(request: Request) -> bool:
+    return _client_key(request) in _LOOPBACK
+
+
+def _trusted(request: Request, pw: str | None) -> bool:
+    if config.get("ui.trust_local", True) and _is_loopback(request):
+        return True
+    if not pw:
+        return False
+    supplied = request.headers.get("x-snitch-password") or ""
+    if supplied and _hmac.compare_digest(supplied, pw):
+        return True
+    cookie = request.cookies.get(_SESSION_COOKIE) or ""
+    return bool(cookie) and _hmac.compare_digest(cookie, _session_token(pw))
+
 
 @app.middleware("http")
 async def _password_gate(request: Request, call_next):
+    if not request.url.path.startswith(V1):
+        return await call_next(request)       # the SPA itself is public
+    if request.url.path in (f"{V1}/auth/login", f"{V1}/auth/logout"):
+        return await call_next(request)       # the way in cannot itself be gated
     pw = config.get("ui.password")
-    if pw and request.url.path.startswith(V1) and request.url.path != f"{V1}/health":
-        import hmac
-        if not hmac.compare_digest(request.headers.get("x-terrawatch-password") or "",
-                                   pw):
-            return JSONResponse({"detail": "unauthorized"}, status_code=401)
-    return await call_next(request)
+    if request.url.path == f"{V1}/health" and not _trusted(request, pw):
+        # Liveness for anything that cannot authenticate (uptime probes, external
+        # healthchecks); the rich body — queue depth, storage, credentials — is
+        # for the authenticated surface only.
+        return JSONResponse({"ok": True})
+    if _trusted(request, pw):
+        return await call_next(request)
+    return JSONResponse({"detail": "unauthorized"}, status_code=401)
+
+
+class LoginIn(BaseModel):
+    password: str
+
+
+@app.post(f"{V1}/auth/login")
+def login(body: LoginIn, request: Request):
+    """Exchange the shared password for a session cookie, so browsers can fetch
+    imagery and export bundles without a custom header."""
+    pw = config.get("ui.password")
+    if not pw:
+        raise HTTPException(400, "no password is configured on this installation")
+    key, now_s = _client_key(request), _time.time()
+    recent = [t for t in _login_failures.get(key, []) if now_s - t < _LOGIN_WINDOW_S]
+    if len(recent) >= _LOGIN_MAX_ATTEMPTS:
+        raise HTTPException(429, "too many attempts; wait a minute and try again")
+    if not _hmac.compare_digest(body.password, pw):
+        _login_failures[key] = recent + [now_s]
+        raise HTTPException(401, "wrong password")
+    _login_failures.pop(key, None)
+    resp = JSONResponse({"ok": True})
+    resp.set_cookie(_SESSION_COOKIE, _session_token(pw), httponly=True,
+                    samesite="lax", path="/", max_age=30 * 24 * 3600)
+    return resp
+
+
+@app.post(f"{V1}/auth/logout")
+def logout():
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(_SESSION_COOKIE, path="/")
+    return resp
 
 
 # --- models ----------------------------------------------------------------
@@ -146,8 +244,10 @@ def aoi_preview(body: AoiIn):
     except Exception as e:  # noqa: BLE001
         raise HTTPException(400, f"That area could not be read as a shape: {e}")
     area = geo.area_km2(aoi)
+    cap = int(config.get("adapters.max_pixels", adapters.MAX_GRID_PIXELS))
     out = {"area_km2": area, "analysis_crs": geo.utm_crs(aoi),
            "slow_warning": area > 500,
+           "over_pixel_cap": area * 1e6 / 100.0 > cap,
            "suggested_cron": {s: geo.suggest_cron(aoi, s) for s in ("S2", "S1")},
            "s2": None, "s1_orbits": [], "errors": {}}
     end = datetime.now(timezone.utc)
@@ -173,6 +273,42 @@ def aoi_preview(body: AoiIn):
     except Exception as e:  # noqa: BLE001
         out["errors"]["s1"] = str(e)
     return out
+
+
+# --- PWTT battle-damage assessment (Earth Engine lane) ---------------------
+
+class PwttIn(BaseModel):
+    aoi_geojson: dict
+    #: Conflict start: the baseline window ends here.
+    war_start: str
+    #: Assessment start: the post-event window begins here.
+    inference_start: str
+    pre_interval: float | None = None
+    post_interval: float | None = None
+    threshold: float | None = None
+
+
+@app.post(f"{V1}/pwtt/assess")
+def pwtt_assess(body: PwttIn):
+    """One-shot battle-damage assessment over two periods, computed in Earth Engine.
+
+    This is not the forward-monitoring pipeline: PWTT compares two periods on GEE's
+    own Sentinel-1 preprocessing, so it runs server-side and returns a summary rather
+    than a scored scene. See `snitch/pwtt.py` for why it is kept separate.
+    """
+    from . import pwtt as pwtt_lane
+    try:
+        aoi = geo.clean(body.aoi_geojson)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(400, f"That area could not be read as a shape: {e}")
+    try:
+        return pwtt_lane.assess(aoi, body.war_start, body.inference_start,
+                                body.pre_interval, body.post_interval, body.threshold)
+    except ImportError as e:  # noqa: BLE001
+        raise HTTPException(501, "The PWTT lane needs the optional `pwtt` and "
+                                 f"`earthengine-api` packages: {e}")
+    except ValueError as e:  # noqa: BLE001
+        raise HTTPException(400, str(e))
 
 
 # --- projects --------------------------------------------------------------
@@ -221,10 +357,31 @@ def create_project(p: ProjectIn, c=Depends(con)):
     elif sensors == {"S1", "S2"}:
         preference = ["cdse", "earthsearch", "planetary"]
     params = {**recipe["defaults"], **p.params}
+    # A recipe may declare a default of null for a parameter only the user can supply
+    # (the PWTT conflict start date). Refusing here beats accepting the project and
+    # failing every run it schedules.
+    for r in chosen:
+        missing = sorted(k for k, v in {**r["defaults"], **p.params}.items()
+                         if v is None)
+        if missing:
+            raise HTTPException(
+                400, f"{r['display_name']} needs {', '.join(missing)}: this recipe "
+                     "has no sensible default for it, so it must be given in params")
     try:
         aoi = geo.clean(p.aoi_geojson)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(400, f"That area could not be read as a shape: {e}")
+    area_km2 = geo.area_km2(aoi)
+    # Both sensors are analysed on a 10 m grid, so pixels can be estimated from
+    # the area alone. Refusing here beats accepting a project whose every run
+    # would die in the loader (adapters.load enforces the same ceiling exactly).
+    cap = int(config.get("adapters.max_pixels", adapters.MAX_GRID_PIXELS))
+    if area_km2 * 1e6 / 100.0 > cap:
+        raise HTTPException(
+            400, f"That area is ≈{area_km2:,.0f} km² — about "
+                 f"{area_km2 * 1e4:,.0f} Mpx on the 10 m analysis grid, past the "
+                 f"{cap // 1_000_000} Mpx ceiling. Split it into smaller projects "
+                 "(adapters.max_pixels raises the ceiling if you really mean it).")
     now = db.now()
     uuid = db.new_uuid()
     cron = p.schedule_cron or geo.suggest_cron(aoi, recipe["sensor"])
@@ -707,6 +864,9 @@ def list_detectors():
 _CONFIG_RESTART = {"storage.data_dir"}
 _CONFIG_ENV_ONLY = {"adapters.gee.service_account_json"}
 _CONFIG_SECRET = {"ui.password"}
+#: URLs the server itself will call with alert data (and sometimes credentials).
+_OUTBOUND_URL_KEYS = {"notifications.webhook.url", "notifications.slack.webhook_url",
+                      "notifications.matrix.homeserver", "explanations.vlm_endpoint"}
 
 _CONFIG_HELP = {
     "storage.data_dir": "Where the database and artifacts live. Changing it needs a restart; existing files do not move.",
@@ -724,6 +884,7 @@ _CONFIG_HELP = {
     "adapters.gee.batch_export_eecu": "Tasks at or above this estimate go through batch Export.",
     "adapters.gee.export_bucket": "Bucket for batch exports (required once batch_export_eecu applies).",
     "adapters.gee.eecu_per_megapixel": "Cost model used to estimate a task's EECU-hours.",
+    "adapters.max_pixels": "Hard ceiling on one analysis grid, in pixels. Larger areas are refused with an explanation instead of exhausting memory.",
     "scheduler.max_concurrent_runs": "Runs this installation processes at once.",
     "scheduler.poll_jitter_minutes": "Random delay added to scheduled polls so installs don't stampede the catalogue.",
     "alerts.default_exit_ratio": "Fraction of peak area below which an open incident closes.",
@@ -734,11 +895,12 @@ _CONFIG_HELP = {
     "explanations.vlm_endpoint": "OpenAI-compatible endpoint for the vision model.",
     "explanations.vlm_model": "Model name the endpoint is queried with.",
     "ui.password": "Gate the API behind a password. Write-only: never returned. Blank means keep the current one.",
+    "ui.trust_local": "Answer requests from this machine (loopback) without the password. Turn off on a server, where the proxy also arrives from loopback.",
 }
 
 
 def _env_name(dotted: str) -> str:
-    return "TW_" + dotted.replace(".", "__").upper()
+    return "SNITCH_" + dotted.replace(".", "__").upper()
 
 
 def _walk_leaves(node: Any, prefix: str = ""):
@@ -838,6 +1000,15 @@ def put_config(body: ConfigIn):
         except ValueError as e:
             rejected[dotted] = str(e)
             continue
+        # The server posts alert data — and sometimes credentials — to these URLs.
+        # A plain-http target leaks both, so accept it only for loopback hosts.
+        if dotted in _OUTBOUND_URL_KEYS and coerced:
+            from urllib.parse import urlparse
+            u = urlparse(coerced if isinstance(coerced, str) else "")
+            if u.scheme != "https" and (u.hostname or "") not in (
+                    "localhost", "127.0.0.1", "::1"):
+                rejected[dotted] = "must be an https URL (localhost excepted)"
+                continue
         updates.append((dotted, coerced))
         results[dotted] = "restart" if dotted in _CONFIG_RESTART else "live"
 
@@ -864,7 +1035,7 @@ def put_config(body: ConfigIn):
             set_path(snapshot, dotted, value)
         tmp = path + ".tmp"
         with open(tmp, "w") as f:
-            f.write("# Managed through the TerraWatch UI; the hand-edited original"
+            f.write("# Managed through the Snitch UI; the hand-edited original"
                     " is preserved as config.yaml.orig\n")
             yaml.safe_dump(snapshot, f, sort_keys=False)
         for dotted, value in updates:
@@ -896,7 +1067,7 @@ def health(c=Depends(con), check_adapters: bool = False):
             "worker": {"stalled_jobs": stalled,
                        "ok": stalled == 0,
                        "hint": "No worker has picked up queued jobs for over 5 minutes."
-                               " Start one with: python -m terrawatch.worker"
+                               " Start one with: python -m snitch.worker"
                                if stalled else None},
             "adapters": ad,
             "credentials": config.credential_status(),
@@ -932,20 +1103,20 @@ def project_health(uuid: str, c=Depends(con)):
 def export_project(uuid: str, c=Depends(con)):
     from .export import build
     _project(c, uuid)
-    return FileResponse(build(c, project_uuid=uuid), filename=f"terrawatch_{uuid}.zip")
+    return FileResponse(build(c, project_uuid=uuid), filename=f"snitch_{uuid}.zip")
 
 
 @app.get(f"{V1}/runs/{{uuid}}/export")
 def export_run(uuid: str, c=Depends(con)):
     from .export import build
-    return FileResponse(build(c, run_uuid=uuid), filename=f"terrawatch_run_{uuid}.zip")
+    return FileResponse(build(c, run_uuid=uuid), filename=f"snitch_run_{uuid}.zip")
 
 
 @app.get(f"{V1}/alerts/{{uuid}}/export")
 def export_alert(uuid: str, c=Depends(con)):
     from .export import build
     return FileResponse(build(c, alert_uuid=uuid),
-                        filename=f"terrawatch_alert_{uuid}.zip")
+                        filename=f"snitch_alert_{uuid}.zip")
 
 
 @app.get(f"{V1}/artifacts/{{artifact_id}}/raw")

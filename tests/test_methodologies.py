@@ -4,16 +4,16 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from terrawatch import db
+from snitch import db
 
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
-    monkeypatch.setenv("TW_DATA_DIR", str(tmp_path))
-    from terrawatch import config, db as _db
+    monkeypatch.setenv("SNITCH_DATA_DIR", str(tmp_path))
+    from snitch import config, db as _db
     config.config.cache_clear()
     monkeypatch.setattr(_db, "DB_PATH", str(tmp_path / "t.db"))
-    from terrawatch import api, scheduler
+    from snitch import api, scheduler
     monkeypatch.setattr(scheduler, "start", lambda: type("S", (), {
         "add_job": lambda *a, **k: None, "remove_job": lambda *a, **k: None,
         "get_job": lambda *a, **k: None})())
@@ -23,8 +23,8 @@ def client(tmp_path, monkeypatch):
 
 @pytest.fixture
 def con(tmp_path, monkeypatch):
-    monkeypatch.setenv("TW_DATA_DIR", str(tmp_path))
-    from terrawatch import config, db as _db
+    monkeypatch.setenv("SNITCH_DATA_DIR", str(tmp_path))
+    from snitch import config, db as _db
     config.config.cache_clear()
     monkeypatch.setattr(_db, "DB_PATH", str(tmp_path / "t.db"))
     c = _db.connect(str(tmp_path / "t.db"))

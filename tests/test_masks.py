@@ -1,7 +1,7 @@
 """Masks against fixtures with known pixel counts (spec §18)."""
 import numpy as np
 
-from terrawatch import masks
+from snitch import masks
 
 
 def _fixture():

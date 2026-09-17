@@ -1,10 +1,10 @@
 """P8 detector checks with synthetic changes and unchanged controls."""
 import numpy as np
 
-from terrawatch.detectors import (
+from snitch.detectors import (
     BuiltupDual, DNBR, IrmadCva, MNDWIExtent, RaddProbabilistic, REGISTRY,
 )
-from terrawatch.recipes import REGISTRY as RECIPES
+from snitch.recipes import REGISTRY as RECIPES
 
 
 RNG = np.random.default_rng(8222026)
@@ -208,8 +208,9 @@ def test_irmad_season_override_is_loud_and_traceable():
     assert any("explicitly overridden" in note for note in r.notes)
 
 
-def test_all_eight_recipes_resolve_to_compatible_detectors():
-    assert len(RECIPES) == 8
+def test_every_recipe_resolves_to_a_compatible_detector():
+    # Eight local recipes plus the Earth Engine PWTT lane.
+    assert len(RECIPES) == 9
     for recipe in RECIPES.values():
         det = REGISTRY[recipe["detector"]]
         assert recipe["sensor"] == det.spec.sensor

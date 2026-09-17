@@ -21,7 +21,9 @@ export default function Projects() {
       const ps = (await api.projects()).items as Project[];
       return Promise.all(ps.map(async (p) => {
         const [runs, inc, h] = await Promise.all([
-          api.runs(p.uuid), api.incidents(p.uuid), api.projectHealth(p.uuid)]);
+          // 60 covers the 40-point sparkline with polarity-filtering headroom;
+          // the default 200 full rows was over-fetch for a ≤40-point polyline.
+          api.runs(p.uuid, 60), api.incidents(p.uuid), api.projectHealth(p.uuid)]);
         // One sparkline per *methodology*, not one blended line: z-scores and p-values
         // on the same polyline is a chart that lies. The primary method's runs are the
         // project headline; the rest live on the Runs tab.
@@ -86,7 +88,7 @@ export default function Projects() {
             <b>No monitors yet.</b>
             <p className="tiny muted">
               A monitor is one area plus one question — draw the area, pick what kind of
-              change matters, and TerraWatch watches it from then on.
+              change matters, and Snitch watches it from then on.
             </p>
             <Link to="/new"><button className="primary">Create your first monitor</button></Link>
           </div>

@@ -5,8 +5,8 @@ that: display_bands must hand back exactly three bands per recipe, and render mu
 produce three valid PNGs for each."""
 import numpy as np
 
-from terrawatch import chips
-from terrawatch.recipes import REGISTRY
+from snitch import chips
+from snitch.recipes import REGISTRY
 
 
 def test_display_bands_is_always_exactly_three():

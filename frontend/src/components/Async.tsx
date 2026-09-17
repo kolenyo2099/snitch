@@ -10,7 +10,7 @@ export function ErrorBox({ error, onRetry, what }:
       <b>{what ? `${what} could not be loaded.` : "Could not load this."}</b>
       <div className="tiny" style={{ marginTop: 4 }}>{error}</div>
       <p className="tiny" style={{ margin: "6px 0 0" }}>
-        This is a problem reaching TerraWatch's API — not a statement about your data.
+        This is a problem reaching Snitch's API — not a statement about your data.
         Check that the API process is running.
       </p>
       {onRetry && <button style={{ marginTop: 8 }} onClick={onRetry}>Retry</button>}

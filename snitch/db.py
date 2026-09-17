@@ -1,17 +1,36 @@
 """SQLite schema, connection, and the job queue."""
 import json, os, sqlite3, uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from .config import data_dir
 from .log import log
 
-# One resolution for every stored thing: the config layer handles TW_DATA_DIR and the
+# One resolution for every stored thing: the config layer handles SNITCH_DATA_DIR and the
 # storage.data_dir key, so the database, artifacts and logs cannot end up in different
 # trees depending on which module resolved the path first.
 DATA_DIR = data_dir()
-DB_PATH = os.path.join(DATA_DIR, "terrawatch.db")
+DB_PATH = os.path.join(DATA_DIR, "snitch.db")
 # Kept separate from DB_PATH on purpose; see scheduler.start().
 SCHEDULER_DB_PATH = os.path.join(DATA_DIR, "scheduler.db")
+
+
+def _adopt_legacy_files() -> None:
+    """The app was named TerraWatch before 1.0; its files are renamed in place so an
+    existing data directory is adopted instead of silently starting over. Runs at
+    import, before any connection: a database renamed together with its -wal/-shm
+    sidecars is a consistent snapshot as long as no writer has it open."""
+    pairs = [
+        (os.path.join(DATA_DIR, "terrawatch.db"), DB_PATH),
+        (os.path.join(DATA_DIR, "terrawatch.db-wal"), DB_PATH + "-wal"),
+        (os.path.join(DATA_DIR, "terrawatch.db-shm"), DB_PATH + "-shm"),
+    ]
+    for old, new in pairs:
+        if os.path.exists(old) and not os.path.exists(new):
+            os.replace(old, new)
+            log.info("adopted legacy file", extra={"extra": {"from": old, "to": new}})
+
+
+_adopt_legacy_files()
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS project (
@@ -211,6 +230,18 @@ def methodology(con, project_id: int, methodology_id: int | None = None):
 
 # --- job queue -------------------------------------------------------------
 
+#: How long a leased job is safe from being reclaimed. A job that runs longer must
+#: keep extending its lease (see ``progress`` and the worker's heartbeat) — anything
+#: that lets the expiry pass while the job still runs gets the same backtest executed
+#: twice by the next worker that comes along.
+LEASE_SECONDS = 300
+
+
+def _lease_expires(seconds: int = LEASE_SECONDS) -> str:
+    return (datetime.now(timezone.utc)
+            + timedelta(seconds=seconds)).isoformat(timespec="seconds")
+
+
 def enqueue(con, kind: str, payload: dict, project_id: int | None = None,
             available_at: str | None = None) -> int:
     t = now()
@@ -221,12 +252,10 @@ def enqueue(con, kind: str, payload: dict, project_id: int | None = None,
     return cur.lastrowid
 
 
-def lease(con, lease_seconds: int = 300):
+def lease(con, lease_seconds: int = LEASE_SECONDS):
     """Atomically claim one due job. Returns a Row or None."""
-    from datetime import timedelta
     t = now()
-    expires = (datetime.now(timezone.utc) + timedelta(seconds=lease_seconds)
-               ).isoformat(timespec="seconds")
+    expires = _lease_expires(lease_seconds)
     con.execute("BEGIN IMMEDIATE")
     try:
         row = con.execute(
@@ -256,8 +285,22 @@ def progress(con, job, done: int, total: int | None = None,
         con.execute("UPDATE job SET progress_done=?, progress_total=COALESCE(?,"
                     "progress_total), progress_note=COALESCE(?,progress_note),"
                     " updated_at=? WHERE id=?", (done, total, note, now(), job_id))
+        # A job that reports progress is still running: push its lease expiry out so
+        # a slow job is not reclaimed and executed a second time (status-guarded, so
+        # a report racing the finish never resurrects a done job's lease).
+        con.execute("UPDATE job SET lease_expires_at=? WHERE id=? AND status='leased'",
+                    (_lease_expires(), job_id))
     except Exception:  # noqa: BLE001
         log.warning("progress update failed", extra={"extra": {"job": job_id}})
+
+
+def requeue(con, job_id: int):
+    """Put a leased job back untouched: the worker was told to stop, not the job to
+    fail. The attempt made on lease is undone, so a deploy or a closed laptop does
+    not spend the job's retry budget on a shutdown it survived."""
+    con.execute("UPDATE job SET status='queued', attempts=MAX(attempts-1,0),"
+                " lease_expires_at=NULL, updated_at=? WHERE id=?",
+                (now(), job_id))
 
 
 def finish(con, job_id: int, error: str | None = None):
@@ -268,7 +311,11 @@ def finish(con, job_id: int, error: str | None = None):
     elif row["attempts"] >= row["max_attempts"]:
         status, avail = "failed", now()
     else:
-        status, avail = "queued", now()  # ponytail: immediate retry, add backoff if a flaky source hammers us
+        # Exponential backoff: an immediate retry against a source that is failing
+        # right now just burns the remaining attempts in the next ten seconds.
+        backoff_s = min(30 * 2 ** (row["attempts"] - 1), 3600)
+        avail = _lease_expires(backoff_s)
+        status = "queued"
     con.execute("UPDATE job SET status=?, last_error=?, available_at=?, updated_at=?"
                 " WHERE id=?", (status, error, avail, now(), job_id))
     return status

@@ -11,11 +11,11 @@ AOI = {"type": "Polygon", "coordinates": [[[0.0, 0.0], [0.02, 0.0], [0.02, 0.02]
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
-    monkeypatch.setenv("TW_DATA_DIR", str(tmp_path))
-    from terrawatch import config, db
+    monkeypatch.setenv("SNITCH_DATA_DIR", str(tmp_path))
+    from snitch import config, db
     config.config.cache_clear()
     monkeypatch.setattr(db, "DB_PATH", str(tmp_path / "t.db"))
-    from terrawatch import api, scheduler
+    from snitch import api, scheduler
     monkeypatch.setattr(scheduler, "start", lambda: type("S", (), {
         "add_job": lambda *a, **k: None, "remove_job": lambda *a, **k: None,
         "get_job": lambda *a, **k: None})())
@@ -76,7 +76,7 @@ def test_registries_carry_references(client):
 
 
 def test_radar_recipe_requires_an_orbit(client, monkeypatch):
-    from terrawatch.recipes import REGISTRY
+    from snitch.recipes import REGISTRY
     REGISTRY["_fake_s1"] = {**REGISTRY["vegetation_loss_optical"],
                             "id": "_fake_s1", "sensor": "S1"}
     r = client.post("/api/v1/projects", json={"name": "x", "aoi_geojson": AOI,
@@ -108,7 +108,7 @@ def test_json_columns_are_decoded_for_clients(client):
 
 
 def test_mask_artifact_has_browser_renderable_overlay(client):
-    from terrawatch import artifacts, db
+    from snitch import artifacts, db
     con = db.connect()
     aid = artifacts.put_cog(con, np.pad(np.ones((4, 4)), 2), "EPSG:4326",
                             Affine(0.01, 0, -1, 0, -0.01, 1))
@@ -121,7 +121,7 @@ def test_mask_artifact_has_browser_renderable_overlay(client):
 
 
 def test_acknowledged_diagnostic_leaves_dashboard_feed(client):
-    from terrawatch import db
+    from snitch import db
     con = db.connect()
     db.diagnostic(con, "RUN_FAILED", "error", "fixture failure")
     diag_id = con.execute("SELECT id FROM diagnostic ORDER BY id DESC").fetchone()["id"]
@@ -161,7 +161,7 @@ def test_artifact_path_survives_a_moved_data_dir(client, tmp_path):
     digest rather than trusting the absolute path recorded at write time. A database
     written inside a container recorded /data/artifacts/... and served 404s for every
     chip when the same store was opened from the host."""
-    from terrawatch import artifacts, db
+    from snitch import artifacts, db
     con = db.connect()
     aid = artifacts.put_bytes(con, b"\x89PNG-ish", "image/png")
     con.execute("UPDATE artifact SET path='/nonexistent/container/path.bin' WHERE id=?",
@@ -173,7 +173,7 @@ def test_artifact_path_survives_a_moved_data_dir(client, tmp_path):
 
 
 def test_feed_hides_diagnostics_from_deleted_projects_but_keeps_global_ones(client):
-    from terrawatch import db
+    from snitch import db
     con = db.connect()
     pid = con.execute(
         "INSERT INTO project(uuid, name, aoi_geojson, aoi_area_km2, analysis_crs,"
@@ -196,7 +196,7 @@ def test_feed_hides_diagnostics_from_deleted_projects_but_keeps_global_ones(clie
 
 def test_diagnostics_group_and_acknowledge_by_code(client):
     """609 identical warnings are one problem; they must be clearable in one action."""
-    from terrawatch import db
+    from snitch import db
     con = db.connect()
     for i in range(7):
         db.diagnostic(con, "ADAPTER_FALLBACK", "warning", f"fallback {i}")
@@ -218,7 +218,7 @@ def test_diagnostics_group_and_acknowledge_by_code(client):
 
 def test_capped_diagnostics_page_reports_the_true_total(client):
     """A page of 100 out of 609 that does not say so is a silent truncation."""
-    from terrawatch import db
+    from snitch import db
     con = db.connect()
     for i in range(12):
         db.diagnostic(con, "ADAPTER_FALLBACK", "warning", f"n{i}")
@@ -228,7 +228,7 @@ def test_capped_diagnostics_page_reports_the_true_total(client):
 
 
 def test_health_reports_a_queue_with_no_worker_draining_it(client):
-    from terrawatch import db
+    from snitch import db
     con = db.connect()
     con.execute(
         "INSERT INTO job(kind, payload_json, status, available_at, created_at,"
@@ -242,7 +242,7 @@ def test_health_reports_a_queue_with_no_worker_draining_it(client):
 
 
 def test_a_job_deferred_into_the_future_is_not_called_stalled(client):
-    from terrawatch import db
+    from snitch import db
     con = db.connect()
     con.execute(
         "INSERT INTO job(kind, payload_json, status, available_at, created_at,"
@@ -256,7 +256,7 @@ def test_a_job_deferred_into_the_future_is_not_called_stalled(client):
 
 def test_bulk_triage_marks_many_alerts_in_one_call(client):
     """A triage queue cleared one card at a time is a queue you stop clearing."""
-    from terrawatch import db
+    from snitch import db
     con = db.connect()
     pid = con.execute(
         "INSERT INTO project(uuid, name, aoi_geojson, aoi_area_km2, analysis_crs,"
@@ -286,7 +286,7 @@ def test_bulk_triage_marks_many_alerts_in_one_call(client):
                     json={"uuids": uuids, "user_status": "false"})
     assert r.json()["updated"] == 3
 
-    from terrawatch import db as _db
+    from snitch import db as _db
     con = _db.connect()
     statuses = [row["user_status"] for row in con.execute(
         "SELECT user_status FROM alert WHERE uuid IN (?,?,?)", uuids)]
@@ -298,18 +298,20 @@ def test_config_ui_roundtrip(client, monkeypatch, tmp_path):
     """Settings edits go through the API: applied live, secrets never returned,
     environment overrides refused, file rewritten with a backup."""
     import yaml
-    from terrawatch import config as cfgmod
+    from snitch import config as cfgmod
     yml = tmp_path / "config.yaml"
     yml.write_text(yaml.safe_dump({
         "storage": {"gc_enabled": False, "max_artifact_gb": 50, "data_dir": "./data"},
         "alerts": {"cooldown_days": 45},
         "explanations": {"vlm_endpoint": None},
-        "ui": {"password": "sekret"},
+        # trust_local off: this test is about password enforcement, which only
+        # applies to callers the loopback trust does not cover.
+        "ui": {"password": "sekret", "trust_local": False},
     }))
     monkeypatch.setattr(cfgmod, "PATH", str(yml))
-    monkeypatch.setenv("TW_ALERTS__COOLDOWN_DAYS", "60")
+    monkeypatch.setenv("SNITCH_ALERTS__COOLDOWN_DAYS", "60")
     cfgmod.config.cache_clear()
-    auth = {"x-terrawatch-password": "sekret"}
+    auth = {"x-snitch-password": "sekret"}
     try:
         keys = client.get("/api/v1/config", headers=auth).json()["keys"]
 
@@ -318,7 +320,7 @@ def test_config_ui_roundtrip(client, monkeypatch, tmp_path):
         assert keys["ui.password"]["set"] is True
         # An env override is reported with its effective value.
         assert keys["alerts.cooldown_days"]["value"] == 60
-        assert keys["alerts.cooldown_days"]["env"] == "TW_ALERTS__COOLDOWN_DAYS"
+        assert keys["alerts.cooldown_days"]["env"] == "SNITCH_ALERTS__COOLDOWN_DAYS"
 
         # Env-overridden keys are refused: the variable would win on restart.
         r = client.put("/api/v1/config", headers=auth,
@@ -352,8 +354,71 @@ def test_config_ui_roundtrip(client, monkeypatch, tmp_path):
         assert client.get("/api/v1/config",
                           headers=auth).status_code == 401
         assert client.get("/api/v1/config",
-                          headers={"x-terrawatch-password": "nueva"}
+                          headers={"x-snitch-password": "nueva"}
                           ).json()["keys"]["ui.password"]["value"] is None
         assert cfgmod.get("ui.password") == "nueva"
     finally:
         cfgmod.config.cache_clear()
+
+
+def test_a_recipe_with_no_default_for_a_parameter_refuses_until_it_is_given(client):
+    """PWTT cannot invent a conflict start date, so a project without one is refused
+    at creation rather than accepted and failed on every run it schedules."""
+    body = {"name": "pwtt", "aoi_geojson": AOI, "recipe_ids": ["battle_damage_radar"],
+            "s1_relative_orbit": 43}
+    r = client.post("/api/v1/projects", json=body)
+    assert r.status_code == 400 and "war_start" in r.json()["detail"]
+
+    r = client.post("/api/v1/projects",
+                    json={**body, "params": {"war_start": "2022-02-24"}})
+    assert r.status_code == 201, r.text
+    assert r.json()["params"]["war_start"] == "2022-02-24"
+
+
+def test_password_gate_loopback_trust_and_session_cookie(client, monkeypatch):
+    """No password + loopback trust: open to this machine only. With a password and
+    trust_local off: header or cookie required — and the cookie alone must carry
+    <img>-style requests that cannot send headers."""
+    from snitch import api as api_mod, config as cfg
+    monkeypatch.setenv("SNITCH_UI__PASSWORD", "sekret")
+    monkeypatch.setenv("SNITCH_UI__TRUST_LOCAL", "false")
+    cfg.config.cache_clear()
+    try:
+        # health stays reachable for probes, but liveness only
+        assert client.get("/api/v1/health").json() == {"ok": True}
+        assert client.get("/api/v1/projects").status_code == 401
+        # login: wrong password refused (with backoff tracking), right one mints a cookie
+        assert client.post("/api/v1/auth/login",
+                           json={"password": "nope"}).status_code == 401
+        r = client.post("/api/v1/auth/login", json={"password": "sekret"})
+        assert r.status_code == 200
+        # the cookie alone now authenticates, no custom header
+        assert client.get("/api/v1/projects").status_code == 200
+        client.post("/api/v1/auth/logout")
+        assert client.get("/api/v1/projects").status_code == 401
+        # header path still works for non-browser clients
+        h = {"x-snitch-password": "sekret"}
+        assert client.get("/api/v1/projects", headers=h).status_code == 200
+        # https validation: an outbound endpoint on plain http is rejected at write time
+        r = client.put("/api/v1/config", headers=h,
+                       json={"values": {"notifications.webhook.url":
+                                        "http://evil.example/hook"}})
+        assert "notifications.webhook.url" in r.json()["rejected"]
+    finally:
+        monkeypatch.delenv("SNITCH_UI__PASSWORD")
+        monkeypatch.delenv("SNITCH_UI__TRUST_LOCAL")
+        cfg.config.cache_clear()
+
+
+def test_project_creation_refuses_areas_past_the_pixel_cap(client, monkeypatch):
+    from snitch import config as cfg
+    monkeypatch.setenv("SNITCH_ADAPTERS__MAX_PIXELS", "1000")
+    cfg.config.cache_clear()
+    try:
+        # the fixture AOI is ~7.6 km² ≈ 76k px at 10 m — far past 1,000 px
+        r = client.post("/api/v1/projects", json={
+            "name": "too big", "aoi_geojson": AOI, "recipe_ids": ["general_change_optical"]})
+        assert r.status_code == 400 and "pixel" in r.json()["detail"].lower()
+    finally:
+        monkeypatch.delenv("SNITCH_ADAPTERS__MAX_PIXELS")
+        cfg.config.cache_clear()

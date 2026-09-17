@@ -1,4 +1,4 @@
-"""config.yaml with TW_ environment overrides. Credentials are read from the
+"""config.yaml with SNITCH_ environment overrides. Credentials are read from the
 environment by name and never stored in, or returned from, this module."""
 import os
 from functools import lru_cache
@@ -6,18 +6,22 @@ from functools import lru_cache
 import yaml
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PATH = os.environ.get("TW_CONFIG", os.path.join(ROOT, "config.yaml"))
+PATH = os.environ.get("SNITCH_CONFIG", os.path.join(ROOT, "config.yaml"))
 
 
 @lru_cache(maxsize=1)
 def config() -> dict:
     cfg = yaml.safe_load(open(PATH)) if os.path.exists(PATH) else {}
-    # TW_STORAGE__DATA_DIR=... overrides cfg['storage']['data_dir']
+    # SNITCH_STORAGE__DATA_DIR=... overrides cfg['storage']['data_dir']
     for key, val in os.environ.items():
-        if not key.startswith("TW_") or "__" not in key:
+        if not key.startswith("SNITCH_") or "__" not in key:
+            continue
+        # An empty override means "not set": compose passes password vars through
+        # unconditionally, and an empty string must not clobber the configured one.
+        if val is None or str(val).strip() == "":
             continue
         node = cfg
-        *path, leaf = key[3:].lower().split("__")
+        *path, leaf = key[len("SNITCH_"):].lower().split("__")
         for p in path:
             node = node.setdefault(p, {})
         node[leaf] = yaml.safe_load(val)
@@ -45,5 +49,5 @@ def credential_status() -> dict:
 
 
 def data_dir() -> str:
-    d = os.environ.get("TW_DATA_DIR") or get("storage.data_dir", "./data")
+    d = os.environ.get("SNITCH_DATA_DIR") or get("storage.data_dir", "./data")
     return os.path.abspath(os.path.join(ROOT, d)) if not os.path.isabs(d) else d

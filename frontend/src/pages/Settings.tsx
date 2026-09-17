@@ -12,7 +12,7 @@ const QUEUE_LABEL: Record<string, string> = {
 };
 
 export default function Settings() {
-  const [pw, setPw] = useState(localStorage.getItem("tw_password") || "");
+  const [pw, setPw] = useState(localStorage.getItem("snitch_password") || "");
   const [gcResult, setGc] = useState<any>();
   const [gcErr, setGcErr] = useState<string>();
   const [gcBusy, setGcBusy] = useState(false);
@@ -36,7 +36,7 @@ export default function Settings() {
     <>
       <h1 className="page">Settings</h1>
       <p className="sub">Everything the <code>config.yaml</code> used to hold, editable
-        right here. Environment overrides (<code>TW_SECTION__KEY</code>) still win.</p>
+        right here. Environment overrides (<code>SNITCH_SECTION__KEY</code>) still win.</p>
 
       {/* Everything below reports on the server. If the server cannot be reached, say
           so once at the top — the panels used to render "not configured" and zeroes,
@@ -97,7 +97,7 @@ export default function Settings() {
           <p className="tiny muted">
             Set these as environment variables on the API process (or in the{" "}
             <code>environment:</code> block of <code>docker-compose.yml</code>) and
-            restart it. Without CDSE credentials, TerraWatch falls back to the open
+            restart it. Without CDSE credentials, Snitch falls back to the open
             Earth Search catalogue, which is recorded on every run that uses it.
           </p>
         </div>
@@ -192,8 +192,9 @@ export default function Settings() {
         <div className="panel">
           <h3 className="card">Access</h3>
           <p className="tiny muted">If <code>ui.password</code> is set in config.yaml,
-            enter it here to reach the API from this browser. It is stored in this
-            browser only.</p>
+            enter it here to reach the API from this browser. Saving signs this
+            browser in (a cookie, so imagery and export links work); the password
+            itself is kept in this browser only.</p>
           <div className="row">
             <label className="tiny muted">
               API password
@@ -202,8 +203,21 @@ export default function Settings() {
                      onChange={(e) => setPw(e.target.value)} />
             </label>
             <button style={{ alignSelf: "flex-end" }}
-                    onClick={() => { localStorage.setItem("tw_password", pw); location.reload(); }}>
+                    onClick={async () => {
+                      try { await api.login(pw); } catch { /* cookie is best-effort;
+                             the header alone still authenticates API calls */ }
+                      localStorage.setItem("snitch_password", pw);
+                      location.reload();
+                    }}>
               Save
+            </button>
+            <button className="tiny muted" style={{ alignSelf: "flex-end", background: "none" }}
+                    onClick={async () => {
+                      try { await api.logout(); } catch { /* already signed out */ }
+                      localStorage.removeItem("snitch_password");
+                      location.reload();
+                    }}>
+              Sign out
             </button>
           </div>
         </div>

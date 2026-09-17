@@ -2,7 +2,7 @@
 import numpy as np
 import pytest
 
-from terrawatch.detectors import HarmonicResidual
+from snitch.detectors import HarmonicResidual
 
 
 def _scene(ndvi: np.ndarray) -> dict:

@@ -56,7 +56,11 @@ export function ProjectProgress({ uuid, onIdle }: {
       } catch { /* a dropped poll is not worth a visible error */ }
     };
     tick();
-    const t = setInterval(tick, 3000);
+    const t = setInterval(() => {
+      // Progress bars in a hidden tab advance the moment the tab is shown again;
+      // polling at 3 s for them is pure battery and server waste.
+      if (document.visibilityState === "visible") tick();
+    }, 3000);
     return () => { alive = false; clearInterval(t); };
   }, [uuid]);
 

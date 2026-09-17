@@ -1,22 +1,37 @@
 services:
   api:
     build: .
-    command: uvicorn terrawatch.api:app --host 0.0.0.0 --port 8000
-    ports: ["8000:8000"]
-    volumes: ["./data:/data", "./config.yaml:/app/config.yaml:ro",
+    command: uvicorn snitch.api:app --host 0.0.0.0 --port 8000
+    # localhost by default: this API is single-password at best. To expose it,
+    # put a TLS reverse proxy in front or change the binding deliberately.
+    ports: ["127.0.0.1:8000:8000"]
+    volumes: ["./data:/data", "./config.yaml:/app/config.yaml",
               "./recipes:/app/recipes:ro"]
     environment:
-      TW_DATA_DIR: /data
+      SNITCH_DATA_DIR: /data
+      # Server posture: a reverse proxy arrives from loopback too, so loopback
+      # must not be trusted here — set SNITCH_UI__PASSWORD in .env (see
+      # .env.example) and every caller has to present it.
+      SNITCH_UI__TRUST_LOCAL: "false"
+      SNITCH_UI__PASSWORD: "${SNITCH_UI__PASSWORD:-}"
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
 
   worker:
     build: .
-    command: ["python", "-c", "from terrawatch.worker import main; main()"]
-    volumes: ["./data:/data", "./config.yaml:/app/config.yaml:ro",
+    command: ["python", "-c", "from snitch.worker import main; main()"]
+    volumes: ["./data:/data", "./config.yaml:/app/config.yaml",
               "./recipes:/app/recipes:ro"]
     environment:
-      TW_DATA_DIR: /data
-    depends_on: [api]
+      SNITCH_DATA_DIR: /data
+      SNITCH_LOG_NAME: worker
+    depends_on:
+      api:
+        condition: service_healthy
     restart: unless-stopped
     # scale with: docker compose up -d --scale worker=3
-

@@ -6,7 +6,7 @@ import rasterio
 import xarray as xr
 from affine import Affine
 
-from terrawatch.adapters import SceneRef, StacAdapter, as_array_dict
+from snitch.adapters import SceneRef, StacAdapter, as_array_dict
 
 
 AOI = {"type": "Polygon", "coordinates": [[

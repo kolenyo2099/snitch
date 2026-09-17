@@ -1,20 +1,31 @@
 const BASE = "/api/v1";
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const pw = localStorage.getItem("tw_password");
+  const pw = localStorage.getItem("snitch_password");
   const r = await fetch(BASE + path, {
     ...init,
     headers: {
       "content-type": "application/json",
-      ...(pw ? { "x-terrawatch-password": pw } : {}),
+      ...(pw ? { "x-snitch-password": pw } : {}),
       ...(init?.headers || {}),
     },
   });
-  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  if (!r.ok) {
+    const detail = (await r.json().catch(() => ({}))).detail || r.statusText;
+    // A 401 is not an outage: the password is missing or wrong, and the fix is the
+    // Access section of Settings — say so instead of "problem reaching the API".
+    const msg = r.status === 401
+      ? "Password required or incorrect — set it in Settings → Access."
+      : detail;
+    throw Object.assign(new Error(msg), { status: r.status });
+  }
   return r.status === 204 ? (undefined as T) : r.json();
 }
 
 export const api = {
+  login: (password: string) =>
+    req<any>("/auth/login", { method: "POST", body: JSON.stringify({ password }) }),
+  logout: () => req<any>("/auth/logout", { method: "POST" }),
   health: () => req<any>("/health"),
   healthFull: () => req<any>("/health?check_adapters=true"),
   aoiPreview: (aoi_geojson: any, signal?: AbortSignal) =>
@@ -53,9 +64,16 @@ export const api = {
     req<any>(`/projects/${u}/reanalyse${m ? `?methodology=${m}` : ""}`,
              { method: "POST", body: JSON.stringify(params) }),
   observations: (u: string) => req<{ items: any[] }>(`/projects/${u}/observations`),
-  runs: (u: string) => req<{ items: any[] }>(`/projects/${u}/runs`),
+  runs: (u: string, limit = 200) =>
+    req<{ items: any[] }>(`/projects/${u}/runs?limit=${limit}`),
   run: (u: string) => req<any>(`/runs/${u}`),
   alerts: (u: string) => req<{ items: any[] }>(`/projects/${u}/alerts`),
+  alertsPage: (u: string, cursor?: number) =>
+    req<{ items: any[]; next_cursor: number | null }>(
+      `/projects/${u}/alerts?limit=100${cursor ? `&cursor=${cursor}` : ""}`),
+  incidentsPage: (u: string, cursor?: number) =>
+    req<{ items: any[]; next_cursor: number | null }>(
+      `/projects/${u}/incidents?limit=100${cursor ? `&cursor=${cursor}` : ""}`),
   alert: (u: string) => req<any>(`/alerts/${u}`),
   triage: (u: string, body: any) =>
     req<any>(`/alerts/${u}`, { method: "PATCH", body: JSON.stringify(body) }),

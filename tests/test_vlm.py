@@ -1,6 +1,6 @@
 import json
 
-from terrawatch import vlm
+from snitch import vlm
 
 
 def test_vlm_disabled_never_reads_artifacts(monkeypatch):

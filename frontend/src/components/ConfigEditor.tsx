@@ -117,7 +117,7 @@ export function ConfigEditor({ onSaved }: { onSaved?: () => void } = {}) {
         written to the file (the hand-edited original is kept as{" "}
         <code>config.yaml.orig</code>) and apply to the running API immediately — the
         background worker picks them up on its next restart. An environment override{" "}
-        (<code>TW_SECTION__KEY</code>) always wins and can only be changed there.
+        (<code>SNITCH_SECTION__KEY</code>) always wins and can only be changed there.
       </p>
       <Async state={state} what="The configuration">
         {(data) => (

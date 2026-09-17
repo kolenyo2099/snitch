@@ -1,0 +1,44 @@
+id: battle_damage_radar
+version: "1.0"
+display_name: "Battle damage (Pixel-Wise T-Test)"
+plain_question: "Which buildings here have been destroyed since the fighting started?"
+sensor: S1
+detector: pwtt_damage
+resolution_m: 10
+bands: [VV, VH]
+indices: []
+# No mask chain beyond the unavoidable nodata check. The method carries its own
+# exclusion — Dynamic World built-up cover before the conflict — and applies it
+# inside Earth Engine; adding a second, locally computed mask on top would change
+# what is scored and break agreement with the reference implementation.
+mask_chain: []
+min_valid_fraction: 0.70
+defaults:
+  war_start: null            # required: the date the pre-conflict period ends
+  pre_interval: 12.0         # months of pre-conflict reference imagery
+  post_interval: 2.0         # months of post-event imagery, ending on each new scene
+  threshold: 3.3
+  min_scenes_per_orbit: 4
+  min_mapping_unit_m2: 300
+  consecutive_confirmations: 1
+  exit_ratio: 0.85
+default_provenance:
+  war_start: heuristic
+  pre_interval: literature
+  post_interval: literature
+  threshold: literature
+  min_scenes_per_orbit: heuristic
+  min_mapping_unit_m2: heuristic
+  consecutive_confirmations: heuristic
+  exit_ratio: heuristic
+reference:
+  citation: "Ballinger, O. (2025). The Pixelwise T-Test: a new algorithm for battle damage detection using Sentinel-1 imagery. Remote Sensing of Environment."
+  url: "https://www.sciencedirect.com/science/article/pii/S0034425725004298"
+  note: "The published implementation is called unchanged rather than reimplemented, so this recipe returns the same numbers as the reference application for the same area and dates."
+limitations:
+  - "This method runs in Google Earth Engine, not on the local path: it is defined on Earth Engine's own Sentinel-1 preprocessing and on Dynamic World, and reproducing it locally would change the result. A Cloud project is required."
+  - "Damage is scored only where Dynamic World reported built-up cover above 0.1 in the year before the conflict start; destruction outside that mask is unscored, not absent."
+  - "The t-test needs several scenes per relative orbit in each window, so the first score cannot appear until the post-event window is full — two months after the conflict start by default."
+  - "A rise in backscatter means the surface changed, not why: rubble, new construction and clearance all raise the statistic."
+  - "Every run submits an Earth Engine job, so a multi-year calibration is hundreds of them. Runs are checked against the Earth Engine budget in config.yaml before they are submitted and refused once it is spent."
+  - "The reference period is a fixed date window, so damage is cumulative since the conflict start rather than new since the last acquisition."

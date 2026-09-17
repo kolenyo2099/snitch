@@ -274,9 +274,9 @@ def _batch_export(ee, coll, geom, crs: str, res: float, estimate: float):
             f"this task is estimated at {estimate} EECU-hours, above the batch-export "
             "threshold, and adapters.gee.export_bucket is not configured; synchronous "
             "downloads are not used for work this size")
-    prefix = f"terrawatch/{int(time.time())}"
+    prefix = f"snitch/{int(time.time())}"
     task = ee.batch.Export.image.toCloudStorage(
-        image=coll.toBands(), description="terrawatch-export", bucket=bucket,
+        image=coll.toBands(), description="snitch-export", bucket=bucket,
         fileNamePrefix=prefix, region=geom, scale=res, crs=crs, fileFormat="GeoTIFF",
         maxPixels=1e10)
     task.start()
@@ -291,9 +291,18 @@ def _batch_export(ee, coll, geom, crs: str, res: float, estimate: float):
         raise TimeoutError(f"GEE export task {prefix} did not finish in time")
     if status.get("state") != "COMPLETED":
         raise RuntimeError(f"GEE export failed: {status.get('error_message', status)}")
+    import rasterio
     import xarray as xr
     import rioxarray  # noqa: F401
-    return xr.open_dataset(f"/vsigs/{bucket}/{prefix}.tif", engine="rasterio")
+    # /vsigs/ is GDAL's lane: ee's initialized credentials do not carry over, so the
+    # service account has to be handed to GDAL explicitly or the read fails with an
+    # anonymous-access error. The result is loaded inside the Env block, while the
+    # credentials are active.
+    sa = os.environ.get("GEE_SERVICE_ACCOUNT_JSON") or get("adapters.gee.service_account_json")
+    info = sa if sa.lstrip().startswith("{") else open(sa).read()
+    with rasterio.Env(CPL_GS_CREDENTIALS=info):
+        return xr.open_dataset(f"/vsigs/{bucket}/{prefix}.tif",
+                               engine="rasterio").load()
 
 
 # --- persistence -----------------------------------------------------------

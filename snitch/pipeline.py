@@ -524,6 +524,22 @@ def _scene_ref_from_item(item: dict, adapter_name: str,
         item=item)
 
 @handler("run")
+def _record_failed_run(con, p, m, kind, det, params, run_uuid, started, backend,
+                       error, obs_id=None):
+    """Persist a failed run so the history shows the attempt, with the traceback,
+    instead of a gap that looks like nothing happened on those dates."""
+    import traceback
+    con.execute(
+        "INSERT INTO run(uuid,project_id,methodology_id,kind,detector_id,"
+        "detector_version,params_json,target_observation_id,started_at,"
+        "finished_at,status,error_json,compute_backend)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,'failed',?,?)",
+        (run_uuid, p["id"], m["id"], kind, det.spec.id, det.spec.version,
+         json.dumps(params), obs_id, started, db.now(),
+         json.dumps({"error": str(error), "traceback": traceback.format_exc()}),
+         backend))
+
+
 def run_scene(con, job, payload):
     p, m, recipe, det, params, aoi = _ctx(con, payload["project_id"],
                                           payload.get("methodology_id"))
@@ -531,8 +547,10 @@ def run_scene(con, job, payload):
                                  scene_id=payload["scene_id"])
     adapter = _adapter_named(con, p, payload["adapter"])
     kind = payload.get("kind", "forward")
-    # Reproducibility-relevant: a GEE-served run is marked as one everywhere.
-    backend = "gee" if adapter.name == "gee" else "local"
+    # Reproducibility-relevant: a GEE-served run is marked as one everywhere. The
+    # PWTT detector computes in Earth Engine no matter which catalogue served the
+    # triggering scene, so it is a GEE run even on the local adapter.
+    backend = "gee" if adapter.name == "gee" or det.spec.id == "pwtt_damage" else "local"
 
     if m["baseline_artifact_id"] is None and det.spec.needs_baseline:
         db.enqueue(con, "baseline", {"project_id": p["id"],
@@ -543,7 +561,14 @@ def run_scene(con, job, payload):
                                  + timedelta(minutes=1)).isoformat(timespec="seconds"))
         return {"deferred": "baseline"}
 
-    data, invalid, summary, vf = _load_masked(con, p, m, recipe, adapter, scene)
+    run_uuid, started = db.new_uuid(), db.now()
+    try:
+        data, invalid, summary, vf = _load_masked(con, p, m, recipe, adapter, scene)
+    except Exception as e:  # noqa: BLE001
+        # A scene that cannot even be loaded still leaves a failed run row: a silent
+        # gap in history reads as quiet skies, not a broken source.
+        _record_failed_run(con, p, m, kind, det, params, run_uuid, started, backend, e)
+        raise
     if _gate(con, p, recipe, scene, vf, summary, adapter.name):
         return {"gated": True}
     obs_id = _write_observation(con, p, scene, vf, summary, "usable",
@@ -564,9 +589,12 @@ def run_scene(con, job, payload):
                           f"The paired radar observation could not be loaded: {e}. "
                           "This run uses the optical stream only.", project_id=p["id"])
 
-    started, caveats, notes = db.now(), [], []
-    run_uuid = db.new_uuid()
-    base = bl.load(con, m["baseline_artifact_id"]) if det.spec.needs_baseline else None
+    caveats, notes = [], []
+    try:
+        base = bl.load(con, m["baseline_artifact_id"]) if det.spec.needs_baseline else None
+    except Exception as e:  # noqa: BLE001
+        _record_failed_run(con, p, m, kind, det, params, run_uuid, started, backend, e)
+        raise
     if base and base["meta"].get("adapter") not in (None, adapter.name):
         caveats.append("PROVENANCE_DISCONTINUITY")
     if vf < 1.0:
@@ -602,6 +630,18 @@ def run_scene(con, job, payload):
                 raise RuntimeError(f"misregistration {shift:.2f} px exceeds tolerance")
 
         score_params = params
+        if det.spec.id == "pwtt_damage":
+            # This detector's reference period is a date window, not a fitted
+            # baseline, so it needs the AOI and the acquisition date rather than a
+            # baseline artifact.
+            score_params = {**params, "_aoi": aoi, "_sensed_at": scene.datetime,
+                            "resolution_m": recipe.get("resolution_m", 10.0)}
+            # Unlike every other detector this one bills Earth Engine on *every* run,
+            # so the budget is checked before the work is submitted rather than only
+            # recorded after. A backtest is hundreds of these.
+            from . import pwtt as pwtt_lane
+            grid = next(v.shape for k, v in data.items() if not k.startswith("_"))
+            gee.check_budget(con, pwtt_lane.eecu_estimate(grid, 30), p["id"])
         if det.spec.id == "radd_probabilistic":
             prior = _previous_score(con, p["id"], det.spec.id, scene.datetime, kind)
             if prior is not None:
@@ -629,16 +669,8 @@ def run_scene(con, job, payload):
                 "observation_id": radar_obs_id,
             }
     except Exception as e:  # noqa: BLE001
-        import traceback
-        con.execute(
-            "INSERT INTO run(uuid,project_id,methodology_id,kind,detector_id,"
-            "detector_version,params_json,target_observation_id,started_at,"
-            "finished_at,status,error_json,compute_backend)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?, 'failed',?,?)",
-            (run_uuid, p["id"], m["id"], kind, det.spec.id, det.spec.version,
-             json.dumps(params), obs_id, started, db.now(),
-             json.dumps({"error": str(e), "traceback": traceback.format_exc()}),
-             backend))
+        _record_failed_run(con, p, m, kind, det, params, run_uuid, started, backend,
+                           e, obs_id=obs_id)
         raise
 
     # A detector may derive its own threshold from the scene (R4 `otsu` mode); when it
@@ -766,6 +798,10 @@ def run_scene(con, job, payload):
          started, db.now(), "ok", skip, score_id, mask_id,
          json.dumps(summary_json), payload.get("supersedes"), backend)).lastrowid
 
+    if summary_json["aux"].get("eecu_estimate"):
+        gee.record(con, p["id"], "pwtt_run", summary_json["aux"]["eecu_estimate"],
+                   {"run": run_uuid, "scene": scene.scene_id})
+
     alerting.close_stale_incidents(con, p["id"], m["id"], scene.datetime)
     alerting.retract_unconfirmed(con, p["id"], m["id"], scene.datetime, needed)
     if skip or kind == "backtest":
@@ -879,7 +915,7 @@ def backtest(con, job, payload):
     adapter = _adapter(con, p, "backtest", recipe["sensor"])
     end = datetime.now(timezone.utc)
     split = end - timedelta(days=365 * years)
-    if m["baseline_artifact_id"] is None:
+    if det.spec.needs_baseline and m["baseline_artifact_id"] is None:
         fit_baseline(con, job, {"project_id": p["id"], "methodology_id": m["id"],
                                 "before": split.isoformat(timespec="seconds")})
         m = db.methodology(con, p["id"], m["id"])
@@ -921,12 +957,26 @@ def reanalyse(con, job, payload):
         " AND r.methodology_id=? AND r.status='ok' ORDER BY r.started_at",
         (p["id"], m["id"])).fetchall()
     n = 0
+    failures = 0
     for r in rows:
         db.progress(con, job, n, len(rows),
                     f"Re-scoring history ({n + 1} of {len(rows)})")
-        run_scene(con, job, {"project_id": p["id"], "methodology_id": m["id"],
-                             "scene_id": r["scene_id"], "adapter": r["adapter"],
-                             "item": json.loads(r["stac_item_json"]),
-                             "kind": "reanalysis", "supersedes": r["id"]})
-        n += 1
-    return {"reanalysed": n}
+        try:
+            run_scene(con, job, {"project_id": p["id"], "methodology_id": m["id"],
+                                 "scene_id": r["scene_id"], "adapter": r["adapter"],
+                                 "item": json.loads(r["stac_item_json"]),
+                                 "kind": "reanalysis", "supersedes": r["id"]})
+            n += 1
+        except Exception as e:  # noqa: BLE001
+            # One bad scene must not abandon the reanalysis halfway: the parameters
+            # are already updated, so a partial pass is worse than a complete one.
+            failures += 1
+            log.warning("reanalyse scene failed",
+                        extra={"extra": {"scene": r["scene_id"], "error": str(e)}})
+            db.diagnostic(con, "RUN_FAILED", "warning",
+                          f"Re-analysis of {r['scene_id']} failed: {e}",
+                          project_id=p["id"])
+    if failures:
+        db.progress(con, job, len(rows), len(rows),
+                    f"Done — {failures} scene(s) could not be re-scored")
+    return {"reanalysed": n, "failed": failures}

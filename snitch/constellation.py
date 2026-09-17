@@ -1,7 +1,7 @@
 """Constellation status awareness (spec §4.4). The JSON file is user-editable."""
 import json, os
 
-PATH = os.environ.get("TW_CONSTELLATION_EVENTS",
+PATH = os.environ.get("SNITCH_CONSTELLATION_EVENTS",
                       os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                    "constellation_events.json"))
 
